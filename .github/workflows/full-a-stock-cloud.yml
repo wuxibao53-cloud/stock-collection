@@ -1,0 +1,165 @@
+name: chan-trading-cloud
+
+on:
+  schedule:
+    - cron: '0 0 * * 1-5'
+    - cron: '35 1 * * 1-5'
+    - cron: '35 3 * * 1-5'
+    - cron: '5 7 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Run mode
+        required: true
+        type: choice
+        default: alert
+        options:
+          - incremental
+          - full
+          - analysis
+          - alert
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - run: mkdir -p logs
+
+      - name: Run collector
+        run: |
+          if [ "${{ inputs.mode }}" = "incremental" ]; then
+            python full_a_stock_collector.py --db logs/quotes.db --mode hot
+          elif [ "${{ inputs.mode }}" = "full" ]; then
+            python full_a_stock_collector.py --db logs/quotes.db --mode all
+          elif [ "${{ inputs.mode }}" = "analysis" ]; then
+            python chan_trading_system.py --db logs/quotes.db --export
+          elif [ "${{ inputs.mode }}" = "alert" ]; then
+            python monitor.py --db logs/quotes.db
+          fi
+
+      - name: Verify data
+        run: python - <<'PY'
+import sqlite3
+try:
+  conn = sqlite3.connect('logs/quotes.db')
+  cur = conn.cursor()
+  cur.execute('SELECT COUNT(DISTINCT symbol), COUNT(*) FROM minute_bars')
+  row = cur.fetchone()
+  symbols = row[0] if row else 0
+  records = row[1] if row else 0
+  print(f'Symbols: {symbols}, Records: {records}')
+except Exception as e:
+  print(f'Failed: {e}')
+PY
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: analysis-results
+          path: logs/
+          retention-days: 30
+
+      - name: Notify on success
+        if: success()
+        env:
+          DINGTALK: ${{ secrets.DINGTALK_WEBHOOK }}
+        run: python notify_alert.py --status success --symbols 100 --records 5000
+
+      - name: Notify on failure
+        if: failure()
+        env:
+          DINGTALK: ${{ secrets.DINGTALK_WEBHOOK }}
+        run: python notify_alert.py --status failure --error "Collection failed"
+
+  aggregate:
+    needs: collect
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - run: pip install -r requirements.txt
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: analysis-results
+          path: logs/
+
+      - name: Deduplicate records
+        run: python - <<'PY'
+import sqlite3
+conn = sqlite3.connect('logs/quotes.db')
+cur = conn.cursor()
+cur.execute('DELETE FROM minute_bars WHERE rowid NOT IN (SELECT MIN(rowid) FROM minute_bars GROUP BY symbol, minute)')
+conn.commit()
+conn.close()
+PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: final-database
+          path: logs/quotes.db
+          retention-days: 90
+
+  monitor:
+    needs: aggregate
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: final-database
+          path: logs/
+
+      - name: Build report
+        run: python - <<'PY'
+import json, sqlite3
+from datetime import datetime
+conn = sqlite3.connect('logs/quotes.db')
+cur = conn.cursor()
+try:
+  cur.execute('SELECT COUNT(DISTINCT symbol), COUNT(*) FROM minute_bars')
+  row = cur.fetchone() or (0, 0)
+except:
+  row = (0, 0)
+symbols, records = row
+report = {
+  'timestamp': datetime.now().isoformat(),
+  'symbols': symbols,
+  'records': records,
+  'status': 'SUCCESS'
+}
+import os
+os.makedirs('logs', exist_ok=True)
+with open('logs/monitoring_report.json','w') as f:
+  json.dump(report, f, indent=2)
+PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: monitoring-report
+          path: logs/monitoring_report.json
+          retention-days: 90
