@@ -1,2 +1,2 @@
 requests>=2.31.0
-matplotlib>=3.8.0
+matplotlib>=3.8.0aiohttp>=3.9.0
