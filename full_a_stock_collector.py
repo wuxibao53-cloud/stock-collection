@@ -32,7 +32,10 @@ import time
 from dataclasses import dataclass
 from collections import defaultdict
 
-import aiohttp
+try:
+    import aiohttp
+except Exception:
+    aiohttp = None
 import requests
 
 # 配置日志
@@ -193,13 +196,11 @@ class MultiSourceCollector:
                 
                 url = self.SINA_API.format(symbols=symbol_str)
                 response = self.session.get(url, headers=self.headers, timeout=10)
-                                response = self.session.get(url, headers=self.headers, timeout=10)
-                                if response.status_code == 403:
-                                    raise Exception("Sina API 403 Forbidden")
-                                response.raise_for_status()
+                if response.status_code == 403:
+                    raise Exception("Sina API 403 Forbidden")
+                response.raise_for_status()
                 response.encoding = 'gbk'
-                
-                if response.status_code == 200:
+
                 lines = response.text.split('\n')
                 for line in lines:
                     if not line.strip():
@@ -221,16 +222,11 @@ class MultiSourceCollector:
                                 'timestamp': datetime.now().isoformat(),
                             }
                     self.request_count += 1
-            
-            if self.request_count % 100 == 0:
-                logger.info(f"✓ 已采集{self.request_count}个数据点")
-                
                 if self.request_count % 100 == 0:
                     logger.info(f"✓ 已采集{self.request_count}个数据点")
-            
             except Exception as e:
                 logger.warning(f"✗ 采集失败 {batch[:3]}...: {e}")
-        
+                continue
         return results
     
     def collect_batch(self, symbols: List[str]) -> Dict[str, Dict]:
@@ -480,14 +476,14 @@ def main():
     
     parser = argparse.ArgumentParser(description='全A股数据采集系统')
     parser.add_argument('--db', default='logs/quotes.db', help='数据库路径')
-    parser.add_argument('--mode', choices=['hot', 'all', 'stats'], default='hot',
-                       help='采集模式')
+    parser.add_argument('--mode', choices=['hot', 'incremental', 'all', 'stats'], default='hot',
+                       help='采集模式 (incremental 为 hot 别名)')
     
     args = parser.parse_args()
     
     collector = FullAStockCollector(args.db)
     
-    if args.mode == 'hot':
+    if args.mode in ('hot', 'incremental'):
         print("采集热门股票...")
         collector.collect_incremental()
     elif args.mode == 'all':
