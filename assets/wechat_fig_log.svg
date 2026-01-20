@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="240">
+  <rect width="100%" height="100%" fill="#0b0f1a" />
+  <text x="24" y="36" fill="#9fe6a8" font-size="16">示例：终端实时输出（示意）</text>
+  <g font-family="monospace" font-size="14" fill="#c9f7d1">
+    <text x="24" y="68">09:11:48 上证指数(sh000001): 4113.97（盘前）</text>
+    <text x="24" y="92">09:11:48 贵州茅台(sh600519): 1376.00（昨收）</text>
+    <text x="24" y="116">09:11:48 深证成指(sz399001): 14294.05（昨收）</text>
+    <text x="24" y="140">09:11:48 宁德时代(sz300750): 348.90（昨收）</text>
+  </g>
+</svg>

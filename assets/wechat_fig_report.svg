@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="420">
+  <rect width="100%" height="100%" fill="#ffffff" stroke="#e6eef8"/>
+  <text x="24" y="40" fill="#0b3b6f" font-size="20">示例：采集统计与信号分布（示意）</text>
+  <rect x="24" y="64" width="720" height="140" fill="#f6fbff" stroke="#d9ecff"/>
+  <text x="40" y="110" fill="#333">Top 10 采集数量（示例）</text>
+  <g transform="translate(40,160)">
+    <rect x="0" y="10" width="540" height="18" fill="#59a6ff" />
+    <rect x="0" y="38" width="420" height="18" fill="#90c6ff" />
+    <rect x="0" y="66" width="300" height="18" fill="#cfe6ff" />
+  </g>
+</svg>
