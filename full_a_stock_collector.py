@@ -134,8 +134,8 @@ class MultiSourceCollector:
     """多源数据采集器"""
     
     # API端点
-    SINA_API = "http://hq.sinajs.cn/list={symbols}"
-    TENCENT_API = "http://qt.gtimg.cn/q={symbols}"
+    SINA_API = "https://hq.sinajs.cn/list={symbols}"
+    TENCENT_API = "https://qt.gtimg.cn/q={symbols}"
     
     # 限流参数
     MAX_SYMBOLS_PER_REQUEST = 50  # 单次请求最多符号数
@@ -193,34 +193,37 @@ class MultiSourceCollector:
                 
                 url = self.SINA_API.format(symbols=symbol_str)
                 response = self.session.get(url, headers=self.headers, timeout=10)
+                                response = self.session.get(url, headers=self.headers, timeout=10)
+                                if response.status_code == 403:
+                                    raise Exception("Sina API 403 Forbidden")
+                                response.raise_for_status()
                 response.encoding = 'gbk'
                 
                 if response.status_code == 200:
-                    lines = response.text.split('\n')
-                    for line in lines:
-                        if not line.strip():
-                            continue
-                        
-                        # 解析新浪格式
-                        # hq_str_sh000001="上证指数,4097.64,4098.03,4097.64,4108.50,4091.01,0,0,0,0";
-                        match = re.search(r'hq_str_(\w+)="([^"]+)"', line)
-                        if match:
-                            code = match.group(1)
-                            data = match.group(2).split(',')
-                            
-                            if len(data) >= 8:
-                                results[code] = {
-                                    'name': data[0],
-                                    'price': float(data[1]),
-                                    'open': float(data[2]),
-                                    'high': float(data[4]),
-                                    'low': float(data[5]),
-                                    'volume': self._to_int(data[8]) if len(data) > 8 else 0,
-                                    'amount': self._to_int(data[9]) if len(data) > 9 else 0,
-                                    'timestamp': datetime.now().isoformat(),
-                                }
-                        
-                        self.request_count += 1
+                lines = response.text.split('\n')
+                for line in lines:
+                    if not line.strip():
+                        continue
+                    # 解析新浪格式
+                    match = re.search(r'hq_str_(\w+)="([^"]+)"', line)
+                    if match:
+                        code = match.group(1)
+                        data = match.group(2).split(',')
+                        if len(data) >= 8:
+                            results[code] = {
+                                'name': data[0],
+                                'price': float(data[1]),
+                                'open': float(data[2]),
+                                'high': float(data[4]),
+                                'low': float(data[5]),
+                                'volume': self._to_int(data[8]) if len(data) > 8 else 0,
+                                'amount': self._to_int(data[9]) if len(data) > 9 else 0,
+                                'timestamp': datetime.now().isoformat(),
+                            }
+                    self.request_count += 1
+            
+            if self.request_count % 100 == 0:
+                logger.info(f"✓ 已采集{self.request_count}个数据点")
                 
                 if self.request_count % 100 == 0:
                     logger.info(f"✓ 已采集{self.request_count}个数据点")
@@ -242,11 +245,68 @@ class MultiSourceCollector:
         """
         # 尝试主源
         try:
-            return self.fetch_sina(symbols)
+            results = self.fetch_sina(symbols)
+            if results:
+                return results
+            logger.warning("主源返回空数据，尝试备源")
         except Exception as e:
             logger.error(f"主源采集失败: {e}")
-            # 可以在这里添加备源逻辑
+        # 备源腾讯
+        try:
+            return self.fetch_tencent(symbols)
+        except Exception as e:
+            logger.error(f"备源采集失败: {e}")
             return {}
+
+    def fetch_tencent(self, symbols: List[str]) -> Dict[str, Dict]:
+        """从腾讯API采集数据 (qt.gtimg.cn)"""
+        results = {}
+        for i in range(0, len(symbols), self.MAX_SYMBOLS_PER_REQUEST):
+            batch = symbols[i:i+self.MAX_SYMBOLS_PER_REQUEST]
+            symbol_str = ','.join(batch)
+            try:
+                self._apply_rate_limit()
+                resp = self.session.get(self.TENCENT_API.format(symbols=symbol_str), headers=self.headers, timeout=10)
+                if resp.status_code == 403:
+                    raise Exception("Tencent API 403 Forbidden")
+                resp.raise_for_status()
+                lines = resp.text.split('\n')
+                for line in lines:
+                    if not line.strip():
+                        continue
+                    # 样例: v_sh000001="1~上证指数~000001~2672.03~2669.00~2662.37~2672.03~...~成交量(手)~成交额(元)~..."
+                    parts = line.split('=')
+                    if len(parts) < 2:
+                        continue
+                    payload = parts[1].strip('";')
+                    fields = payload.split('~')
+                    if len(fields) < 10:
+                        continue
+                    code = fields[2]
+                    try:
+                        price = float(fields[3])
+                        prev_close = float(fields[4]) if fields[4] else price
+                        open_p = float(fields[5]) if fields[5] else prev_close
+                        high = float(fields[6]) if fields[6] else price
+                        low = float(fields[7]) if fields[7] else price
+                        volume = self._to_int(fields[8]) * 100  # 手 -> 股
+                        amount = self._to_int(fields[9])
+                    except Exception:
+                        continue
+                    results[code] = {
+                        'name': fields[1],
+                        'price': price,
+                        'open': open_p,
+                        'high': high,
+                        'low': low,
+                        'volume': volume,
+                        'amount': amount,
+                        'timestamp': datetime.now().isoformat(),
+                    }
+            except Exception as e:
+                logger.warning(f"腾讯采集失败 {batch[:3]}...: {e}")
+                continue
+        return results
 
 
 class FullAStockCollector:
