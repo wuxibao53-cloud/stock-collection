@@ -97,17 +97,43 @@ class ChanTheory3PointSignalGenerator:
         if idx < 1 or idx >= len(bars) - 1:
             return False, ""
         
-        prev_bar = bars[idx - 1]
-        curr_bar = bars[idx]
-        next_bar = bars[idx + 1]
+        try:
+            prev_bar = bars[idx - 1]
+            curr_bar = bars[idx]
+            next_bar = bars[idx + 1]
+            
+            # 数据验证和类型转换
+            def safe_value(bar, key):
+                val = bar.get(key, 0)
+                # 如果是列表，取第一个元素
+                if isinstance(val, (list, tuple)):
+                    val = val[0] if val else 0
+                return float(val) if val is not None else 0.0
+            
+            prev_high = safe_value(prev_bar, 'high')
+            prev_low = safe_value(prev_bar, 'low')
+            curr_high = safe_value(curr_bar, 'high')
+            curr_low = safe_value(curr_bar, 'low')
+            next_high = safe_value(next_bar, 'high')
+            next_low = safe_value(next_bar, 'low')
+            
+            # 顶分型：前低，中高，后低
+            if (prev_low < curr_high and 
+                curr_high > next_high and
+                curr_low > next_low):
+                return True, "top"
+            
+            # 底分型：前高，中低，后高
+            if (prev_high > curr_low and 
+                curr_low < next_low and
+                curr_high < next_high):
+                return True, "bottom"
+            
+            return False, ""
         
-        # 顶分型：前低，中高，后低
-        if (prev_bar['low'] < curr_bar['high'] and 
-            curr_bar['high'] > next_bar['high'] and
-            curr_bar['low'] > next_bar['low']):
-            return True, "top"
-        
-        # 底分型：前高，中低，后高
+        except (TypeError, ValueError) as e:
+            logger.debug(f"分型检测异常 at idx {idx}: {e}")
+            return False, ""
         if (prev_bar['high'] > curr_bar['low'] and 
             curr_bar['low'] < next_bar['low'] and
             curr_bar['high'] < next_bar['high']):
@@ -142,26 +168,40 @@ class ChanTheory3PointSignalGenerator:
         if end_idx - start_idx < self.pivot_min_bars:
             return None
         
-        segment = bars[start_idx:end_idx + 1]
+        try:
+            segment = bars[start_idx:end_idx + 1]
+            
+            # 找出最高高点和最低低点
+            def safe_value(bar, key):
+                val = bar.get(key, 0)
+                if isinstance(val, (list, tuple)):
+                    val = val[0] if val else 0
+                return float(val) if val is not None else 0.0
+            
+            highs = [safe_value(b, 'high') for b in segment]
+            lows = [safe_value(b, 'low') for b in segment]
+            
+            if not highs or not lows:
+                return None
+            
+            max_high = max(highs)
+            min_low = min(lows)
+            
+            # 判断是否形成中枢（有重叠区间）
+            pivot_range = max_high - min_low
+            if pivot_range < min(highs) * self.pivot_threshold:
+                return {
+                    'high': max_high,
+                    'low': min_low,
+                    'bars': len(segment),
+                    'range': pivot_range
+                }
+            
+            return None
         
-        # 找出最高高点和最低低点
-        highs = [b['high'] for b in segment]
-        lows = [b['low'] for b in segment]
-        
-        max_high = max(highs)
-        min_low = min(lows)
-        
-        # 判断是否形成中枢（有重叠区间）
-        pivot_range = max_high - min_low
-        if pivot_range < min(highs) * self.pivot_threshold:
-            return {
-                'high': max_high,
-                'low': min_low,
-                'bars': len(segment),
-                'range': pivot_range
-            }
-        
-        return None
+        except Exception as e:
+            logger.debug(f"中枢识别异常: {e}")
+            return None
     
     def _identify_first_buy_point(self, bars: List[Dict], 
                                    fractals: List[Tuple]) -> List[TradingSignal]:
@@ -232,38 +272,54 @@ class ChanTheory3PointSignalGenerator:
         if len(bars) < 20:  # 需要足够的数据
             return signals
         
-        # 查找最近的中枢
-        pivot = None
-        for i in range(len(bars) - self.pivot_min_bars, max(0, len(bars) - 50), -1):
-            pivot = self._find_pivot(bars, i, len(bars) - 1)
-            if pivot:
-                break
-        
-        if not pivot:
+        try:
+            # 查找最近的中枢
+            pivot = None
+            for i in range(len(bars) - self.pivot_min_bars, max(0, len(bars) - 50), -1):
+                pivot = self._find_pivot(bars, i, len(bars) - 1)
+                if pivot:
+                    break
+            
+            if not pivot:
+                return signals
+            
+            current = bars[-1]
+            
+            # 数据类型转换
+            def safe_value(bar, key):
+                val = bar.get(key, 0)
+                if isinstance(val, (list, tuple)):
+                    val = val[0] if val else 0
+                return float(val) if val is not None else 0.0
+            
+            curr_low = safe_value(current, 'low')
+            curr_close = safe_value(current, 'close')
+            curr_high = safe_value(current, 'high')
+            
+            # 判断是否在中枢下沿附近反弹
+            if (curr_low <= pivot['low'] * (1 + self.pivot_threshold) and
+                curr_close > pivot['low'] * (1 + self.pivot_threshold)):
+                
+                # 检查是否突破上沿
+                if curr_high > pivot['high']:
+                    signal = TradingSignal(
+                        symbol=current.get('symbol', 'UNKNOWN'),
+                        signal_type='buy',
+                        point_type='2nd',
+                        minute=current['minute'],
+                        price=pivot['high'],
+                        confidence=0.7,
+                        reason=f"中枢震荡后突破 (中枢范围{pivot['range']:.2%})",
+                        pivot_count=1,
+                        volume_confirm=current.get('volume', 0) > 0
+                    )
+                    signals.append(signal)
+            
             return signals
         
-        current = bars[-1]
-        
-        # 判断是否在中枢下沿附近反弹
-        if (current['low'] <= pivot['low'] * (1 + self.pivot_threshold) and
-            current['close'] > pivot['low'] * (1 + self.pivot_threshold)):
-            
-            # 检查是否突破上沿
-            if current['high'] > pivot['high']:
-                signal = TradingSignal(
-                    symbol=current.get('symbol', 'UNKNOWN'),
-                    signal_type='buy',
-                    point_type='2nd',
-                    minute=current['minute'],
-                    price=pivot['high'],
-                    confidence=0.7,
-                    reason=f"中枢震荡后突破 (中枢范围{pivot['range']:.2%})",
-                    pivot_count=1,
-                    volume_confirm=current.get('volume', 0) > 0
-                )
-                signals.append(signal)
-        
-        return signals
+        except Exception as e:
+            logger.debug(f"第二类买点识别异常: {e}")
+            return signals
     
     def _identify_third_buy_point(self, bars_1m: List[Dict],
                                    bars_5m: List[Dict],
