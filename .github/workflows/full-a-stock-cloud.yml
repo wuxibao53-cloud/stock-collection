@@ -15,8 +15,15 @@ jobs:
           python-version: '3.13'
       - run: pip install -r requirements.txt
       - run: mkdir -p logs
+      - name: Test data source
+        run: |
+          echo "Testing Sina API..."
+          curl -s 'http://hq.sinajs.cn/list=sh000001,sz000001' | head -n 2
       - run: python3 -c "import sqlite3;c=sqlite3.connect('logs/quotes.db');c.cursor().execute('CREATE TABLE IF NOT EXISTS minute_bars(id INTEGER PRIMARY KEY,symbol TEXT,minute TEXT,open REAL,high REAL,low REAL,close REAL,volume INTEGER,amount REAL,UNIQUE(symbol,minute))');c.commit();c.close()"
-      - run: python3 full_a_stock_collector.py --db logs/quotes.db --mode incremental 2>&1 || true
+      - name: Run collector
+        run: python3 full_a_stock_collector.py --db logs/quotes.db --mode incremental 2>&1 | tee logs/collector.log || true
+      - name: Show collector tail
+        run: tail -n 80 logs/collector.log || true
       - run: python3 -c "import sqlite3,os;db='logs/quotes.db';c=sqlite3.connect(db);r=c.cursor().execute('SELECT COUNT(*) FROM minute_bars').fetchone();print(f'Records:{r[0]}')" || true
       - uses: actions/upload-artifact@v4
         if: always()
