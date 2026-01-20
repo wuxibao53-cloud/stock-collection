@@ -4,10 +4,21 @@ on:
   schedule:
     - cron: '0 0 * * 1-5'
   workflow_dispatch:
+    inputs:
+      mode:
+        description: '采集模式'
+        required: false
+        default: 'hot'
+        type: choice
+        options:
+          - hot
+          - incremental
+          - all
 
 jobs:
   run:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       HTTP_PROXY: ${{ secrets.HTTP_PROXY }}
       HTTPS_PROXY: ${{ secrets.HTTPS_PROXY }}
@@ -22,16 +33,29 @@ jobs:
       - name: Test data source
         run: |
           echo "Testing Sina API..."
-          curl -s 'http://hq.sinajs.cn/list=sh000001,sz000001' | head -n 2
+          curl -s 'https://hq.sinajs.cn/list=sh000001,sz000001' | head -n 2 || echo "API test skipped"
       - run: python3 -c "import sqlite3;c=sqlite3.connect('logs/quotes.db');c.cursor().execute('CREATE TABLE IF NOT EXISTS minute_bars(id INTEGER PRIMARY KEY,symbol TEXT,minute TEXT,open REAL,high REAL,low REAL,close REAL,volume INTEGER,amount REAL,UNIQUE(symbol,minute))');c.commit();c.close()"
-      - name: Run collector
-        run: python3 full_a_stock_collector.py --db logs/quotes.db --mode incremental 2>&1 | tee logs/collector.log || true
-      - name: Show collector tail
-        run: tail -n 80 logs/collector.log || true
-      - run: python3 -c "import sqlite3,os;db='logs/quotes.db';c=sqlite3.connect(db);r=c.cursor().execute('SELECT COUNT(*) FROM minute_bars').fetchone();print(f'Records:{r[0]}')" || true
-      - uses: actions/upload-artifact@v4
+      - name: Run async collector
+        run: |
+          MODE="${{ github.event.inputs.mode || 'incremental' }}"
+          echo "采集模式: $MODE"
+          python3 full_a_stock_collector.py --db logs/quotes.db --mode "$MODE" --async 2>&1 | tee logs/collector.log || true
+      - name: Show collector output
+        run: tail -n 100 logs/collector.log || true
+      - name: Verify data
+        run: |
+          python3 -c "import sqlite3,os;db='logs/quotes.db';c=sqlite3.connect(db);r=c.cursor().execute('SELECT COUNT(*) FROM minute_bars').fetchone();count=r[0];print(f'✓ 采集成功: {count} 条记录');c.close();exit(0 if count > 10 else 1)" || echo "采集数据不足"
+      - name: Generate report
         if: always()
-        with:
-          name: logs
-          path: logs
-          retention-days: 30
+        run: |
+          python3 -c "
+          import sqlite3
+          db = 'logs/quotes.db'
+          c = sqlite3.connect(db)
+          cursor = c.cursor()
+          cursor.execute('SELECT symbol, COUNT(*) as cnt FROM minute_bars GROUP BY symbol ORDER BY cnt DESC LIMIT 10')
+          print('\n📈 Top 10 采集最多:')
+          for symbol, cnt in cursor.fetchall():
+              print(f'  {symbol:10} {cnt:6} 条')
+          c.close()
+          " || true

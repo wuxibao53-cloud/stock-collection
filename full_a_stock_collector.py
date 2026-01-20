@@ -345,7 +345,7 @@ class FullAStockCollector:
         self._init_db()
     
     def _init_db(self):
-        """初始化数据库"""
+        """初始化数据库（启用WAL模式以提高并发性能）"""
         try:
             # ensure parent directory exists
             from pathlib import Path
@@ -355,6 +355,11 @@ class FullAStockCollector:
 
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
+            
+            # 启用WAL模式 - 提高异步并发写入性能
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA synchronous=NORMAL")  # NORMAL比FULL快，比NONE安全
+            cursor.execute("PRAGMA cache_size=-10000")  # 10MB缓存
             
             # 创建表
             cursor.execute("""
@@ -383,6 +388,8 @@ class FullAStockCollector:
             
             conn.commit()
             conn.close()
+            
+            logger.info("✓ 数据库初始化完成 (WAL模式启用)")
         
         except Exception as e:
             logger.error(f"数据库初始化失败: {e}")
@@ -442,6 +449,81 @@ class FullAStockCollector:
         if results:
             self._save_results(results)
             logger.info(f"✓ 采集{len(results)}个热门股票")
+    
+    async def collect_incremental_async(self):
+        """
+        异步增量采集 - 高并发版本
+        """
+        if not aiohttp:
+            logger.warning("aiohttp未安装，使用同步模式")
+            return self.collect_incremental()
+        
+        logger.info(f"开始异步增量采集...")
+        
+        from async_stock_collector import AsyncMultiSourceCollector
+        
+        hot_symbols = self.get_hot_symbols(limit=100)
+        
+        async with AsyncMultiSourceCollector(self.db_path) as collector:
+            results = await collector.collect_batch_async(hot_symbols)
+            
+            if results:
+                self._save_results(results)
+                logger.info(f"✓ 异步采集{len(results)}个热门股票")
+    
+    async def collect_all_async(self):
+        """
+        异步采集所有A股 - 支持5000+股票并发采集
+        """
+        if not aiohttp:
+            logger.warning("aiohttp未安装，使用同步模式")
+            return self.collect_all_sync()
+        
+        logger.info(f"开始异步采集全部{len(self.stock_list)}只A股...")
+        start_time = time.time()
+        
+        from async_stock_collector import AsyncMultiSourceCollector
+        
+        batch_size = 500
+        all_symbols = [s.symbol for s in self.stock_list]
+        
+        async with AsyncMultiSourceCollector(self.db_path) as collector:
+            for i in range(0, len(all_symbols), batch_size):
+                batch = all_symbols[i:i+batch_size]
+                logger.info(f"  采集第 {i//batch_size + 1} 批 ({len(batch)} 只)...")
+                
+                results = await collector.collect_batch_async(batch)
+                if results:
+                    self._save_results(results)
+                    logger.info(f"    ✓ 采集{len(results)}只股票")
+                
+                # 批次间休息
+                await asyncio.sleep(0.5)
+        
+        elapsed = time.time() - start_time
+        logger.info(f"✓ 全部采集完成 (耗时{elapsed:.1f}秒)")
+    
+    def collect_all_sync(self):
+        """
+        同步采集所有A股 - 降级版本
+        """
+        logger.info(f"开始采集全部{len(self.stock_list)}只A股（同步模式）...")
+        start_time = time.time()
+        
+        batch_size = 500
+        all_symbols = [s.symbol for s in self.stock_list]
+        
+        for i in range(0, len(all_symbols), batch_size):
+            batch = all_symbols[i:i+batch_size]
+            logger.info(f"  采集第 {i//batch_size + 1} 批 ({len(batch)} 只)...")
+            
+            results = self.collector.collect_batch(batch)
+            if results:
+                self._save_results(results)
+                logger.info(f"    ✓ 采集{len(results)}只股票")
+        
+        elapsed = time.time() - start_time
+        logger.info(f"✓ 全部采集完成 (耗时{elapsed:.1f}秒)")
     
     def _save_results(self, results: Dict):
         """保存采集结果到数据库"""
@@ -514,20 +596,32 @@ def main():
     parser.add_argument('--db', default='logs/quotes.db', help='数据库路径')
     parser.add_argument('--mode', choices=['hot', 'incremental', 'all', 'stats'], default='hot',
                        help='采集模式 (incremental 为 hot 别名)')
+    parser.add_argument('--async', action='store_true', dest='use_async',
+                       help='启用异步模式 (需要aiohttp)')
+    parser.add_argument('--no-async', action='store_true', 
+                       help='禁用异步模式，使用同步模式')
     
     args = parser.parse_args()
     
     collector = FullAStockCollector(args.db)
+    use_async = args.use_async and not args.no_async and aiohttp is not None
     
     if args.mode in ('hot', 'incremental'):
         print("采集热门股票...")
-        collector.collect_incremental()
+        if use_async:
+            logger.info("✓ 使用异步模式")
+            asyncio.run(collector.collect_incremental_async())
+        else:
+            collector.collect_incremental()
+    
     elif args.mode == 'all':
-        print("采集所有股票（演示）...")
-        # 完整采集演示（实际使用GitHub Actions分批）
-        all_symbols = [s.symbol for s in collector.stock_list[:500]]  # 限制演示规模
-        results = collector.collector.collect_batch(all_symbols)
-        collector._save_results(results)
+        print("采集所有A股...")
+        if use_async:
+            logger.info("✓ 使用异步模式采集5000+股票")
+            asyncio.run(collector.collect_all_async())
+        else:
+            logger.info("使用同步模式采集")
+            collector.collect_all_sync()
     
     collector.print_stats()
 
