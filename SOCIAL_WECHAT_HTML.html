@@ -1,0 +1,90 @@
+<!-- WeChat HTML fragment: paste into 微信公众号编辑器的“源码”视图或先粘为 HTML 再切回富文本 -->
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body{font-family: "PingFang SC", "Microsoft YaHei", Helvetica, Arial; color:#222; line-height:1.75;}
+  .cover{width:100%; display:block; margin-bottom:18px}
+  h1{font-size:26px; color:#0b3b6f; margin:8px 0}
+  h2{font-size:20px; color:#0b3b6f; margin:14px 0}
+  p{font-size:15px; color:#333}
+  .note{background:#f6fbff;border-left:4px solid #59a6ff;padding:12px;margin:12px 0}
+  .figure{display:block;margin:18px auto; text-align:center}
+  .fig-caption{font-size:13px;color:#666;margin-top:6px}
+  .code-cmd{display:block;background:#f2f7fb;border:1px solid #e1efff;padding:10px;border-radius:6px;color:#0b3b6f;font-family:monospace}
+  .section{margin:12px 0}
+  .faq dt{font-weight:700;margin-top:10px}
+</style>
+</head>
+<body>
+  <!-- cover: upload assets/wechat_cover.svg and replace src -->
+  <img class="cover" src="assets/wechat_cover.svg" alt="cover" />
+
+  <h1>缠论交易系统 v2.0 —— 从数据采集到回测的完整端到端实战</h1>
+  <p class="note">导读：一个能在 GitHub Actions 上自动跑的 A 股缠论信号平台。本文带你理解设计思路、快速复现运行，并附上演示图与下载指南。</p>
+
+  <div class="section">
+    <h2>1. 我们的目标（2分钟读懂）</h2>
+    <p>把缠论信号工程化：异步采集（热/全量）、缠论三类买卖点识别（线段/中枢/多周期）、回测与风险管理，以及 GitHub Actions 自动化发布报告。</p>
+  </div>
+
+  <div class="section">
+    <h2>2. 系统架构一眼看懂</h2>
+    <p>异步采集（aiohttp）→ SQLite (WAL) → 缠论信号引擎 → 回测与风控 → GitHub Actions 自动化。</p>
+  </div>
+
+  <div class="section">
+    <h2>3. 为什么这么做（可复现的要点）</h2>
+    <p>短句说明：异步提高吞吐；WAL 降低写锁；safe_value 容错字段格式；多周期共振提高置信度；回测结合仓位才可用。</p>
+  </div>
+
+  <div class="section">
+    <h2>4. 快速上手（直接运行）</h2>
+    <p>本地快速验证（热模式，26 只，约 1 秒）：</p>
+    <pre class="code-cmd">python3 run_complete_system.py --mode all --collect-mode hot --no-backtest</pre>
+
+    <p>完整采集（全量，5000+，约 6–9 分钟）：</p>
+    <pre class="code-cmd">python3 run_complete_system.py --mode all --collect-mode all</pre>
+    <p>运行后查看 <code>logs/analysis_report.txt</code> 和 <code>logs/backtest_report.txt</code></p>
+  </div>
+
+  <div class="section">
+    <h2>5. 实测数据与性能</h2>
+    <img class="figure" src="assets/wechat_fig_report.svg" alt="report" width="720"/>
+    <div class="fig-caption">示例：采集统计与信号分布（示意）</div>
+    <p>热模式（26 只）采集耗时约 0.9s；估算全量（5000+）采集耗时约 6–9 分钟，视网络与代理而定。</p>
+  </div>
+
+  <div class="section">
+    <h2>6. 运行演示（日志示例）</h2>
+    <img class="figure" src="assets/wechat_fig_log.svg" alt="log" width="640"/>
+    <div class="fig-caption">示例：终端实时输出日志（示意）</div>
+  </div>
+
+  <div class="section">
+    <h2>7. FAQ（常见问题）</h2>
+    <dl class="faq">
+      <dt>Q: 采集 0 条怎么办？</dt>
+      <dd>A: 用 curl 测试行情源或配置代理，检查 `HTTP_PROXY`/`HTTPS_PROXY`。</dd>
+      <dt>Q: 为什么没信号？</dt>
+      <dd>A: 缠论对历史深度敏感，建议至少 10–15 条 minute K 线。</dd>
+      <dt>Q: GitHub Actions 超时？</dt>
+      <dd>A: 可把 `timeout-minutes` 提高到 45 或 60。</dd>
+    </dl>
+  </div>
+
+  <div class="section">
+    <h2>8. 下一步（建议）</h2>
+    <ul>
+      <li>加入周期回测并保存历史性能</li>
+      <li>接入企业微信/钉钉推送</li>
+      <li>增加自动参数搜索（Grid/Random）</li>
+    </ul>
+  </div>
+
+  <p>（发布前请把顶部封面替换为真实图片并替换文内的仓库链接）</p>
+
+</body>
+</html>
