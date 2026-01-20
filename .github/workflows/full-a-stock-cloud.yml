@@ -1,0 +1,248 @@
+name: 缠论交易系统 - 云端自动执行
+
+on:
+  schedule:
+    # 每个交易日运行
+    # 8:30 开盘前 - 初始化和系统检查
+    - cron: '0 0 * * 1-5'  # UTC 00:00 = 北京时间 08:00
+    
+    # 09:35 开盘后5分钟 - 开始采集和分析
+    - cron: '35 1 * * 1-5'  # UTC 01:35 = 北京时间 09:35
+    
+    # 11:35 上午收盘前5分钟 - 中间统计
+    - cron: '35 3 * * 1-5'  # UTC 03:35 = 北京时间 11:35
+    
+    # 15:05 下午收盘后5分钟 - 收盘统计
+    - cron: '5 7 * * 1-5'   # UTC 07:05 = 北京时间 15:05
+    
+  # 手动触发
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: '执行模式'
+        required: true
+        default: 'incremental'
+        type: choice
+        options:
+          - incremental
+          - full
+          - analysis
+          - alert
+
+jobs:
+  market-collection:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+      
+      - name: 设置 Python 环境
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+      
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: 创建日志目录
+        run: mkdir -p logs
+      
+      - name: 采集热门股票数据 (增量模式)
+        if: ${{ github.event.inputs.mode == 'incremental' || github.event_name == 'schedule' }}
+        run: |
+          python full_a_stock_collector.py --db logs/quotes.db --mode hot
+      
+      - name: 采集全A股数据 (完整模式)
+        if: ${{ github.event.inputs.mode == 'full' }}
+        run: |
+          python full_a_stock_collector.py --db logs/quotes.db --mode all
+      
+      - name: 运行缠论分析
+        if: ${{ github.event.inputs.mode == 'analysis' || always() }}
+        run: |
+          python chan_trading_system.py --db logs/quotes.db --export
+      
+      - name: 生成交易提醒
+        if: ${{ github.event.inputs.mode == 'alert' || always() }}
+        run: |
+          python monitor.py --db logs/quotes.db > logs/monitor_output.txt 2>&1
+      
+      - name: 检查数据质量
+        run: |
+          python -c "
+          import sqlite3
+          conn = sqlite3.connect('logs/quotes.db')
+          cursor = conn.cursor()
+          cursor.execute('SELECT COUNT(DISTINCT symbol), COUNT(*) FROM minute_bars')
+          symbols, records = cursor.fetchone()
+          print(f'✓ 采集{symbols}只股票, {records}条数据')
+          conn.close()
+          "
+      
+      - name: 上传数据和报告
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: analysis-results
+          path: |
+            logs/quotes.db
+            logs/chan_report.json
+            logs/monitor_output.txt
+          retention-days: 30
+      
+      - name: 上传到云存储 (可选)
+        if: always()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          # aws s3 cp logs/quotes.db s3://your-bucket/chan-system/
+          # 或使用阿里云OSS/腾讯云COS
+          echo "云存储集成 - 配置AWS_ACCESS_KEY_ID后启用"
+      
+      - name: 发送告警通知
+        if: failure()
+        run: |
+          # 发送失败通知
+          curl -X POST ${{ secrets.DINGTALK_WEBHOOK }} \
+            -H 'Content-Type: application/json' \
+            -d '{
+              "msgtype": "text",
+              "text": {
+                "content": "❌ 缠论系统采集失败\n时间: '${{ env.RUN_TIME }}'\n检查日志: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              }
+            }'
+        continue-on-error: true
+      
+      - name: 生成性能报告
+        if: always()
+        run: |
+          echo "# GitHub Actions 执行报告" > logs/github_actions_report.md
+          echo "" >> logs/github_actions_report.md
+          echo "- 执行时间: $(date)" >> logs/github_actions_report.md
+          echo "- 工作流: ${{ github.workflow }}" >> logs/github_actions_report.md
+          echo "- 分支: ${{ github.ref }}" >> logs/github_actions_report.md
+          echo "- 运行ID: ${{ github.run_id }}" >> logs/github_actions_report.md
+
+  # 数据聚合任务
+  data-aggregation:
+    needs: market-collection
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+      
+      - name: 设置 Python 环境
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.13'
+      
+      - name: 安装依赖
+        run: |
+          pip install -r requirements.txt
+      
+      - name: 下载采集结果
+        uses: actions/download-artifact@v3
+        with:
+          name: analysis-results
+          path: logs/
+      
+      - name: 数据聚合和去重
+        run: |
+          python -c "
+          import sqlite3
+          conn = sqlite3.connect('logs/quotes.db')
+          cursor = conn.cursor()
+          
+          # 删除重复记录
+          cursor.execute('''
+            DELETE FROM minute_bars WHERE rowid NOT IN (
+              SELECT MIN(rowid) FROM minute_bars GROUP BY symbol, minute
+            )
+          ''')
+          
+          conn.commit()
+          conn.close()
+          print('✓ 数据去重完成')
+          "
+      
+      - name: 上传最终数据
+        uses: actions/upload-artifact@v3
+        with:
+          name: final-database
+          path: logs/quotes.db
+          retention-days: 90
+
+  # 监控和告警任务
+  monitoring-alerts:
+    needs: data-aggregation
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+      
+      - name: 设置 Python 环境
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.13'
+      
+      - name: 下载最终数据
+        uses: actions/download-artifact@v3
+        with:
+          name: final-database
+          path: logs/
+      
+      - name: 生成监控报告
+        run: |
+          python -c "
+          import json
+          import sqlite3
+          from datetime import datetime
+          
+          conn = sqlite3.connect('logs/quotes.db')
+          cursor = conn.cursor()
+          
+          cursor.execute('SELECT COUNT(DISTINCT symbol), COUNT(*) FROM minute_bars')
+          symbols, records = cursor.fetchone()
+          
+          report = {
+            'timestamp': datetime.now().isoformat(),
+            'symbols_collected': symbols,
+            'total_records': records,
+            'average_records_per_symbol': records // max(symbols, 1),
+            'status': 'SUCCESS'
+          }
+          
+          with open('logs/monitoring_report.json', 'w') as f:
+            json.dump(report, f, indent=2)
+          
+          conn.close()
+          print(json.dumps(report, indent=2, ensure_ascii=False))
+          "
+      
+      - name: 保存监控报告
+        uses: actions/upload-artifact@v3
+        with:
+          name: monitoring-report
+          path: logs/monitoring_report.json
+          retention-days: 90
+
+# 定时清理旧数据
+  cleanup:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    
+    steps:
+      - name: 清理30天前的数据
+        run: |
+          echo "清理旧数据任务（可选）"
+          # 清理逻辑
