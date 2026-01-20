@@ -186,6 +186,33 @@ git remote set-url origin https://YOUR_TOKEN@github.com/YOUR_USERNAME/stock-coll
 
 ---
 
+## 配置代理（用于在 GitHub Actions 中绕过网站限制）
+
+如果你想在 GitHub Hosted runner 上使用代理，请在仓库 Settings → Secrets → Actions 中添加以下 Secret（可选）：
+
+- `HTTP_PROXY`：例如 `http://user:pass@proxy.example.com:3128`
+- `HTTPS_PROXY`：例如 `https://user:pass@proxy.example.com:3129`
+- `FORCE_UA`：可选，自定义 User-Agent（用于调试）
+
+工作流会自动将这些 Secrets 注入运行环境，脚本会读取 `HTTP_PROXY` / `HTTPS_PROXY` / `FORCE_UA` 环境变量并应用。
+
+---
+
+## 通过仓库自动触发（推荐，用于测试）
+
+为方便运行和调试，我增加了一个额外的调度工作流（`dispatch-stock-collect.yml`）。你可以创建并推送名为 `trigger/stock-collect` 的分支来触发一次云端采集：
+
+```bash
+# 在本地创建并推送触发分支（只用来触发一次）
+git checkout -b trigger/stock-collect
+git commit --allow-empty -m "trigger stock-collect"
+git push origin trigger/stock-collect
+```
+
+该操作会触发一个短暂的 workflow，它会使用仓库的 `GITHUB_TOKEN` 调用 `stock-collect` 工作流的 `workflow_dispatch`，从而远程触发一次完整的采集并上传 `logs` 工件。
+
+---
+
 ## 后续维护
 
 ### 定期拉取云端数据

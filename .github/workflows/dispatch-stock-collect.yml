@@ -1,0 +1,22 @@
+name: dispatch-stock-collect
+
+on:
+  push:
+    branches:
+      - 'trigger/stock-collect'
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call workflow_dispatch for stock-collect
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Dispatching stock-collect workflow..."
+          curl -s -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            https://api.github.com/repos/${{ github.repository }}/actions/workflows/full-a-stock-cloud.yml/dispatches \
+            -d '{"ref":"main","inputs":{}}'
+          echo "Dispatched"
