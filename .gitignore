@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+env/
+*.egg-info/
+dist/
+build/
+
+# Logs and data
+logs/*.db
+logs/*.db-shm
+logs/*.db-wal
+logs/*.csv
+logs/*.jsonl
+logs/*.png
+logs/archive/
+logs/minute_bars_parquet/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Keep structure
+!logs/.gitkeep

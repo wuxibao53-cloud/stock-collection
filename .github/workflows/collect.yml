@@ -1,0 +1,90 @@
+name: A股行情云端采集
+
+on:
+  schedule:
+    # 工作日 09:25-15:05 (UTC+8转UTC: 01:25-07:05)
+    # 上午场: 09:25-11:35
+    - cron: '25 1 * * 1-5'   # 09:25 启动
+    # 下午场: 12:55-15:05
+    - cron: '55 4 * * 1-5'   # 12:55 启动
+  
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v3
+      
+    - name: 设置Python环境
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.13'
+        
+    - name: 安装依赖
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: 采集上午场数据 (09:25-11:35)
+      if: github.event.schedule == '25 1 * * 1-5'
+      run: |
+        timeout 7800 python realtime_cn_stock.py \
+          --only-trading --dedup --agg --json-log --show-pct \
+          --minute-summary --minute-csv --interval 2 || true
+        
+    - name: 采集下午场数据 (12:55-15:05)
+      if: github.event.schedule == '55 4 * * 1-5'
+      run: |
+        timeout 7800 python realtime_cn_stock.py \
+          --only-trading --dedup --agg --json-log --show-pct \
+          --minute-summary --minute-csv --interval 2 || true
+        
+    - name: 手动触发采集 (5分钟快照)
+      if: github.event_name == 'workflow_dispatch'
+      run: |
+        timeout 300 python realtime_cn_stock.py \
+          --only-trading --dedup --agg --json-log --show-pct \
+          --minute-summary --minute-csv --interval 2 || true
+        
+    - name: 生成蜡烛图
+      if: always()
+      run: |
+        DATE=$(date +%Y-%m-%d)
+        for symbol in sh000001 sz399001 sh600519 sz300750; do
+          python plot_candles.py --source sqlite --db logs/quotes.db \
+            --symbol $symbol --start "$DATE 09:30" \
+            --out logs/candle_${symbol}.png || true
+        done
+        
+    - name: 生成统计报告
+      if: always()
+      run: |
+        python summaries.py --source sqlite --db logs/quotes.db \
+          --out-hourly logs/hourly_summary.csv \
+          --out-daily logs/daily_report.md || true
+        
+    - name: 上传数据artifacts
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: stock-data-${{ github.run_number }}
+        path: |
+          logs/*.db
+          logs/*.csv
+          logs/*.jsonl
+          logs/*.png
+          logs/*.md
+        retention-days: 30
+        
+    - name: 提交数据到仓库 (可选)
+      if: false  # 默认关闭，避免频繁提交
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add logs/*.csv logs/*.png logs/*.md
+        git diff --quiet && git diff --staged --quiet || \
+          git commit -m "Data: $(date +%Y-%m-%d_%H:%M)" && \
+          git push
