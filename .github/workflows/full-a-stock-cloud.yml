@@ -105,18 +105,35 @@ jobs:
           # 或使用阿里云OSS/腾讯云COS
           echo "云存储集成 - 配置AWS_ACCESS_KEY_ID后启用"
       
-      - name: 发送告警通知
-        if: failure()
+      - name: 采集成功通知
+        if: success()
+        env:
+          DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
+          WECHAT_WEBHOOK: ${{ secrets.WECHAT_WEBHOOK }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
         run: |
-          # 发送失败通知
-          curl -X POST ${{ secrets.DINGTALK_WEBHOOK }} \
-            -H 'Content-Type: application/json' \
-            -d '{
-              "msgtype": "text",
-              "text": {
-                "content": "❌ 缠论系统采集失败\n时间: '${{ env.RUN_TIME }}'\n检查日志: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-              }
-            }'
+          python notify_alert.py \
+            --status success \
+            --symbols 100 \
+            --records 5000 \
+            --runtime 120 \
+            --message "云端自动执行成功"
+        continue-on-error: true
+      
+      - name: 采集失败通知
+        if: failure()
+        env:
+          DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
+          WECHAT_WEBHOOK: ${{ secrets.WECHAT_WEBHOOK }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+        run: |
+          python notify_alert.py \
+            --status failure \
+            --error "采集过程中出现错误，请检查日志"
         continue-on-error: true
       
       - name: 生成性能报告
