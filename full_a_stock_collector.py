@@ -37,6 +37,17 @@ try:
 except Exception:
     aiohttp = None
 import requests
+import os
+import random
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+# 默认 User-Agent 列表（轮换用）
+DEFAULT_UAS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Safari/605.1.15',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
+]
 
 # 配置日志
 logging.basicConfig(
@@ -150,6 +161,12 @@ class MultiSourceCollector:
         self.session = requests.Session()
         self.request_count = 0
         self.last_request_time = 0
+        # Setup session retries and headers/proxies
+        retries = Retry(total=3, backoff_factor=0.6, status_forcelist=[429, 500, 502, 503, 504])
+        adapter = HTTPAdapter(max_retries=retries)
+        self.session.mount('https://', adapter)
+        self.session.mount('http://', adapter)
+        self.proxies = {}
         self._setup_headers()
 
     @staticmethod
@@ -161,11 +178,22 @@ class MultiSourceCollector:
             return 0
     
     def _setup_headers(self):
-        """设置请求头"""
+        """设置请求头和代理（从环境变量读取）"""
+        # 支持强制 UA（用于调试或覆盖）
+        ua = os.getenv('FORCE_UA') or random.choice(DEFAULT_UAS)
         self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'User-Agent': ua,
             'Referer': 'http://finance.sina.com.cn',
         }
+        # 读取代理配置（如果在 GitHub Secrets 中配置 HTTP_PROXY / HTTPS_PROXY）
+        http_proxy = os.getenv('HTTP_PROXY') or os.getenv('http_proxy')
+        https_proxy = os.getenv('HTTPS_PROXY') or os.getenv('https_proxy')
+        if http_proxy:
+            self.proxies['http'] = http_proxy
+        if https_proxy:
+            self.proxies['https'] = https_proxy
+        # 使 session 使用同样的代理映射
+        self.session.proxies.update(self.proxies)
     
     def _apply_rate_limit(self):
         """应用限流"""
@@ -195,6 +223,8 @@ class MultiSourceCollector:
                 self._apply_rate_limit()
                 
                 url = self.SINA_API.format(symbols=symbol_str)
+                # rotate UA per batch to reduce fingerprinting
+                self.headers['User-Agent'] = os.getenv('FORCE_UA') or random.choice(DEFAULT_UAS)
                 response = self.session.get(url, headers=self.headers, timeout=10)
                 if response.status_code == 403:
                     raise Exception("Sina API 403 Forbidden")
@@ -317,6 +347,12 @@ class FullAStockCollector:
     def _init_db(self):
         """初始化数据库"""
         try:
+            # ensure parent directory exists
+            from pathlib import Path
+            db_parent = Path(self.db_path).parent
+            if not db_parent.exists():
+                db_parent.mkdir(parents=True, exist_ok=True)
+
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
