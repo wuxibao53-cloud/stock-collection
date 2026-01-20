@@ -148,6 +148,14 @@ class MultiSourceCollector:
         self.request_count = 0
         self.last_request_time = 0
         self._setup_headers()
+
+    @staticmethod
+    def _to_int(value):
+        """将字符串数字安全转换为整数，兼容带小数点的成交额/成交量"""
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return 0
     
     def _setup_headers(self):
         """设置请求头"""
@@ -207,8 +215,8 @@ class MultiSourceCollector:
                                     'open': float(data[2]),
                                     'high': float(data[4]),
                                     'low': float(data[5]),
-                                    'volume': int(data[8]) if data[8] else 0,
-                                    'amount': int(data[9]) if data[9] else 0,
+                                    'volume': self._to_int(data[8]) if len(data) > 8 else 0,
+                                    'amount': self._to_int(data[9]) if len(data) > 9 else 0,
                                     'timestamp': datetime.now().isoformat(),
                                 }
                         
