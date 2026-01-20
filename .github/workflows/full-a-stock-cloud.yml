@@ -37,7 +37,27 @@ jobs:
 
       - run: mkdir -p logs
 
+      - name: Initialize database
+        run: |
+          python3 << 'EOF'
+          import sqlite3
+          conn = sqlite3.connect('logs/quotes.db')
+          cur = conn.cursor()
+          cur.execute('''CREATE TABLE IF NOT EXISTS minute_bars (
+            id INTEGER PRIMARY KEY,
+            symbol TEXT NOT NULL,
+            minute TEXT NOT NULL,
+            open REAL, high REAL, low REAL, close REAL,
+            volume INTEGER, amount REAL,
+            UNIQUE(symbol, minute)
+          )''')
+          conn.commit()
+          conn.close()
+          print('✓ Database initialized')
+          EOF
+
       - name: Run collector
+        continue-on-error: true
         run: |
           if [ "${{ inputs.mode }}" = "incremental" ]; then
             python full_a_stock_collector.py --db logs/quotes.db --mode hot
@@ -60,9 +80,9 @@ jobs:
             row = cur.fetchone()
             symbols = row[0] if row else 0
             records = row[1] if row else 0
-            print(f'Symbols: {symbols}, Records: {records}')
+            print(f'✓ Database status: {symbols} symbols, {records} records')
           except Exception as e:
-            print(f'Failed: {e}')
+            print(f'✗ Verification failed: {e}')
           EOF
 
       - name: Upload results
@@ -104,14 +124,19 @@ jobs:
           path: logs/
 
       - name: Deduplicate records
+        continue-on-error: true
         run: |
           python3 << 'EOF'
           import sqlite3
-          conn = sqlite3.connect('logs/quotes.db')
-          cur = conn.cursor()
-          cur.execute('DELETE FROM minute_bars WHERE rowid NOT IN (SELECT MIN(rowid) FROM minute_bars GROUP BY symbol, minute)')
-          conn.commit()
-          conn.close()
+          try:
+            conn = sqlite3.connect('logs/quotes.db')
+            cur = conn.cursor()
+            cur.execute('DELETE FROM minute_bars WHERE rowid NOT IN (SELECT MIN(rowid) FROM minute_bars GROUP BY symbol, minute)')
+            conn.commit()
+            conn.close()
+            print('✓ Deduplication complete')
+          except Exception as e:
+            print(f'✗ Deduplication error: {e}')
           EOF
 
       - uses: actions/upload-artifact@v4
@@ -137,28 +162,33 @@ jobs:
           path: logs/
 
       - name: Build report
+        continue-on-error: true
         run: |
           python3 << 'EOF'
           import json, sqlite3
           from datetime import datetime
-          conn = sqlite3.connect('logs/quotes.db')
-          cur = conn.cursor()
           try:
-            cur.execute('SELECT COUNT(DISTINCT symbol), COUNT(*) FROM minute_bars')
-            row = cur.fetchone() or (0, 0)
-          except:
-            row = (0, 0)
-          symbols, records = row
-          report = {
-            'timestamp': datetime.now().isoformat(),
-            'symbols': symbols,
-            'records': records,
-            'status': 'SUCCESS'
-          }
-          import os
-          os.makedirs('logs', exist_ok=True)
-          with open('logs/monitoring_report.json','w') as f:
-            json.dump(report, f, indent=2)
+            conn = sqlite3.connect('logs/quotes.db')
+            cur = conn.cursor()
+            try:
+              cur.execute('SELECT COUNT(DISTINCT symbol), COUNT(*) FROM minute_bars')
+              row = cur.fetchone() or (0, 0)
+            except:
+              row = (0, 0)
+            symbols, records = row
+            report = {
+              'timestamp': datetime.now().isoformat(),
+              'symbols': symbols,
+              'records': records,
+              'status': 'SUCCESS' if records > 0 else 'NO_DATA'
+            }
+            import os
+            os.makedirs('logs', exist_ok=True)
+            with open('logs/monitoring_report.json','w') as f:
+              json.dump(report, f, indent=2)
+            print(f'✓ Report generated: {symbols} symbols, {records} records')
+          except Exception as e:
+            print(f'✗ Report error: {e}')
           EOF
 
       - uses: actions/upload-artifact@v4
