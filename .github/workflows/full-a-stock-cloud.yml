@@ -50,19 +50,20 @@ jobs:
           fi
 
       - name: Verify data
-        run: python - <<'PY'
-import sqlite3
-try:
-  conn = sqlite3.connect('logs/quotes.db')
-  cur = conn.cursor()
-  cur.execute('SELECT COUNT(DISTINCT symbol), COUNT(*) FROM minute_bars')
-  row = cur.fetchone()
-  symbols = row[0] if row else 0
-  records = row[1] if row else 0
-  print(f'Symbols: {symbols}, Records: {records}')
-except Exception as e:
-  print(f'Failed: {e}')
-PY
+        run: |
+          python3 << 'EOF'
+          import sqlite3
+          try:
+            conn = sqlite3.connect('logs/quotes.db')
+            cur = conn.cursor()
+            cur.execute('SELECT COUNT(DISTINCT symbol), COUNT(*) FROM minute_bars')
+            row = cur.fetchone()
+            symbols = row[0] if row else 0
+            records = row[1] if row else 0
+            print(f'Symbols: {symbols}, Records: {records}')
+          except Exception as e:
+            print(f'Failed: {e}')
+          EOF
 
       - name: Upload results
         uses: actions/upload-artifact@v4
@@ -103,14 +104,15 @@ PY
           path: logs/
 
       - name: Deduplicate records
-        run: python - <<'PY'
-import sqlite3
-conn = sqlite3.connect('logs/quotes.db')
-cur = conn.cursor()
-cur.execute('DELETE FROM minute_bars WHERE rowid NOT IN (SELECT MIN(rowid) FROM minute_bars GROUP BY symbol, minute)')
-conn.commit()
-conn.close()
-PY
+        run: |
+          python3 << 'EOF'
+          import sqlite3
+          conn = sqlite3.connect('logs/quotes.db')
+          cur = conn.cursor()
+          cur.execute('DELETE FROM minute_bars WHERE rowid NOT IN (SELECT MIN(rowid) FROM minute_bars GROUP BY symbol, minute)')
+          conn.commit()
+          conn.close()
+          EOF
 
       - uses: actions/upload-artifact@v4
         with:
@@ -135,28 +137,29 @@ PY
           path: logs/
 
       - name: Build report
-        run: python - <<'PY'
-import json, sqlite3
-from datetime import datetime
-conn = sqlite3.connect('logs/quotes.db')
-cur = conn.cursor()
-try:
-  cur.execute('SELECT COUNT(DISTINCT symbol), COUNT(*) FROM minute_bars')
-  row = cur.fetchone() or (0, 0)
-except:
-  row = (0, 0)
-symbols, records = row
-report = {
-  'timestamp': datetime.now().isoformat(),
-  'symbols': symbols,
-  'records': records,
-  'status': 'SUCCESS'
-}
-import os
-os.makedirs('logs', exist_ok=True)
-with open('logs/monitoring_report.json','w') as f:
-  json.dump(report, f, indent=2)
-PY
+        run: |
+          python3 << 'EOF'
+          import json, sqlite3
+          from datetime import datetime
+          conn = sqlite3.connect('logs/quotes.db')
+          cur = conn.cursor()
+          try:
+            cur.execute('SELECT COUNT(DISTINCT symbol), COUNT(*) FROM minute_bars')
+            row = cur.fetchone() or (0, 0)
+          except:
+            row = (0, 0)
+          symbols, records = row
+          report = {
+            'timestamp': datetime.now().isoformat(),
+            'symbols': symbols,
+            'records': records,
+            'status': 'SUCCESS'
+          }
+          import os
+          os.makedirs('logs', exist_ok=True)
+          with open('logs/monitoring_report.json','w') as f:
+            json.dump(report, f, indent=2)
+          EOF
 
       - uses: actions/upload-artifact@v4
         with:
