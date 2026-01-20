@@ -22,6 +22,7 @@ Author: 仙儿仙儿碎碎念
 import asyncio
 import json
 import sqlite3
+import re
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple
 import logging
@@ -408,7 +409,6 @@ class FullAStockCollector:
 def main():
     """主函数"""
     import argparse
-    import re
     
     parser = argparse.ArgumentParser(description='全A股数据采集系统')
     parser.add_argument('--db', default='logs/quotes.db', help='数据库路径')
