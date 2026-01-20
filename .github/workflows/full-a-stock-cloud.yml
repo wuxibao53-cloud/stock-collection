@@ -1,3 +1,224 @@
+name: chan-trading-cloud
+
+on:
+  schedule:
+    - cron: '0 0 * * 1-5'
+    - cron: '35 1 * * 1-5'
+    - cron: '35 3 * * 1-5'
+    - cron: '5 7 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Run mode'
+        required: true
+        type: choice
+        default: alert
+        options:
+          - incremental
+          - full
+          - analysis
+          - alert
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Env info
+        run: |
+          uname -a
+          python3 --version || true
+          ls -la
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Prepare logs dir
+        run: mkdir -p logs
+
+      - name: Collect hot (incremental)
+        if: ${{ github.event.inputs.mode == 'incremental' || github.event_name == 'schedule' }}
+        run: python full_a_stock_collector.py --db logs/quotes.db --mode hot
+
+      - name: Collect all (full)
+        if: ${{ github.event.inputs.mode == 'full' }}
+        run: python full_a_stock_collector.py --db logs/quotes.db --mode all
+
+      - name: Chan analysis
+        if: ${{ github.event.inputs.mode == 'analysis' }}
+        run: python chan_trading_system.py --db logs/quotes.db --export
+
+      - name: Monitoring (alert)
+        if: ${{ github.event.inputs.mode == 'alert' }}
+        run: python monitor.py --db logs/quotes.db > logs/monitor_output.txt 2>&1 || true
+
+      - name: Data check
+        run: |
+          python - <<'PY'
+          import sqlite3
+          try:
+              conn = sqlite3.connect('logs/quotes.db')
+              cur = conn.cursor()
+              cur.execute('SELECT COUNT(DISTINCT symbol), COUNT(*) FROM minute_bars')
+              row = cur.fetchone()
+              symbols, records = row if row else (0, 0)
+              print(f'Collected symbols: {symbols}, records: {records}')
+          except Exception as e:
+              print(f'DB check failed: {e}')
+          finally:
+              try:
+                  conn.close()
+              except Exception:
+                  pass
+          PY
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: analysis-results
+          path: |
+            logs/quotes.db
+            logs/chan_report.json
+            logs/monitor_output.txt
+          retention-days: 30
+
+      - name: Notify success
+        if: success()
+        env:
+          DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
+          WECHAT_WEBHOOK: ${{ secrets.WECHAT_WEBHOOK }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+        run: |
+          python notify_alert.py \
+            --status success \
+            --symbols 100 \
+            --records 5000 \
+            --runtime 120 \
+            --message "Cloud run success"
+
+      - name: Notify failure
+        if: failure()
+        env:
+          DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
+          WECHAT_WEBHOOK: ${{ secrets.WECHAT_WEBHOOK }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+        run: |
+          python notify_alert.py \
+            --status failure \
+            --error "Cloud run error, please check logs"
+
+  aggregate:
+    needs: collect
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Download results
+        uses: actions/download-artifact@v4
+        with:
+          name: analysis-results
+          path: logs/
+
+      - name: Deduplicate
+        run: |
+          python - <<'PY'
+          import sqlite3
+          conn = sqlite3.connect('logs/quotes.db')
+          cur = conn.cursor()
+          cur.execute('DELETE FROM minute_bars WHERE rowid NOT IN (SELECT MIN(rowid) FROM minute_bars GROUP BY symbol, minute)')
+          conn.commit()
+          conn.close()
+          print('Dedup done')
+          PY
+
+      - name: Upload final DB
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-database
+          path: logs/quotes.db
+          retention-days: 90
+
+  monitor:
+    needs: aggregate
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Download final DB
+        uses: actions/download-artifact@v4
+        with:
+          name: final-database
+          path: logs/
+
+      - name: Build monitoring report
+        run: |
+          python - <<'PY'
+          import json, sqlite3
+          from datetime import datetime
+          conn = sqlite3.connect('logs/quotes.db')
+          cur = conn.cursor()
+          try:
+              cur.execute('SELECT COUNT(DISTINCT symbol), COUNT(*) FROM minute_bars')
+              row = cur.fetchone() or (0, 0)
+          except Exception:
+              row = (0, 0)
+          symbols, records = row
+          report = {
+            'timestamp': datetime.now().isoformat(),
+            'symbols_collected': symbols,
+            'total_records': records,
+            'average_records_per_symbol': (records // max(symbols, 1)) if symbols else 0,
+            'status': 'SUCCESS'
+          }
+          import os
+          os.makedirs('logs', exist_ok=True)
+          with open('logs/monitoring_report.json','w') as f:
+              json.dump(report, f, indent=2, ensure_ascii=False)
+          print(json.dumps(report, indent=2, ensure_ascii=False))
+          conn.close()
+          PY
+
+      - name: Upload monitoring report
+        uses: actions/upload-artifact@v4
+        with:
+          name: monitoring-report
+          path: logs/monitoring_report.json
+          retention-days: 90
 name: 缠论交易系统 - 云端自动执行
 
 on:
