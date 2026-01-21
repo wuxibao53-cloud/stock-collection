@@ -24,11 +24,19 @@ on:
         required: false
         default: '3'
         type: string
+      timeframes:
+        description: '时间框架（空格分隔，如：1 5 30）'
+        required: false
+        default: '30'
+        type: string
 
 jobs:
   analyze:
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    concurrency:
+      group: cloud-analysis-${{ github.ref }}
+      cancel-in-progress: true
     
     env:
       HTTP_PROXY: ${{ secrets.HTTP_PROXY }}
@@ -77,12 +85,69 @@ jobs:
           print('✓ 数据库初始化完成')
           EOF
       
-      - name: 获取多时间框架历史K线（1f/5f/30f）
+        - name: 获取30f历史K线（全量A股，基线）
         run: |
           MODE="${{ github.event.inputs.mode || 'all' }}"
           DAYS="${{ github.event.inputs.history_days || '3' }}"
-          echo "📊 获取最近 ${DAYS} 天 1f/5f/30f 历史K线（模式: ${MODE}）..."
-          python3 multi_timeframe_fetcher.py --db logs/quotes.db --days ${DAYS} --mode ${MODE} --timeframes 1 5 30 2>&1 | tee logs/history_fetch.log
+          # 定时任务默认仅拉取30f，手动可覆盖为更多时间框架（见下一步）
+          echo "📊 基线：获取最近 ${DAYS} 天 30f 历史K线（模式: ${MODE}）..."
+          python3 multi_timeframe_fetcher.py --db logs/quotes.db --days ${DAYS} --mode ${MODE} --timeframes 30 2>&1 | tee logs/history_fetch_30f.log
+
+        - name: 生成候选股票列表（基于30f分型）
+        run: |
+          python3 << 'EOF'
+          import sqlite3
+          from multi_timeframe_fetcher import MultiTimeframeDataFetcher, TimeFrame
+          
+          db='logs/quotes.db'
+          f = MultiTimeframeDataFetcher(db)
+          conn = sqlite3.connect(db)
+          cur = conn.cursor()
+          cur.execute('SELECT DISTINCT symbol FROM minute_bars_30f')
+          symbols = [row[0] for row in cur.fetchall()]
+          conn.close()
+          
+          watch = []
+          for i,s in enumerate(symbols,1):
+            fr = f.detect_fractal_patterns(s, TimeFrame.THIRTY_MIN)
+            if fr:
+              watch.append(s)
+            if i % 200 == 0:
+              print(f"扫描进度 {i}/{len(symbols)}，候选 {len(watch)} 只...")
+          
+          with open('logs/watchlist.txt','w') as w:
+            for s in watch:
+              w.write(s+'\n')
+          print(f"✓ 候选股票数: {len(watch)} (已写入 logs/watchlist.txt)")
+          EOF
+
+        - name: 获取候选股票的1f/5f（精细化）
+        run: |
+          # 手动触发可覆盖时间框架；默认仅对候选股获取 1 和 5
+          TF_INPUTS="${{ github.event.inputs.timeframes || '' }}"
+          if [ -z "$TF_INPUTS" ]; then TF_INPUTS="1 5"; fi
+          echo "🔎 对候选股票获取时间框架: $TF_INPUTS"
+          python3 << 'EOF'
+          import sqlite3
+          from multi_timeframe_fetcher import MultiTimeframeDataFetcher, TimeFrame
+          
+          db='logs/quotes.db'
+          f = MultiTimeframeDataFetcher(db)
+          # 读取候选列表
+          with open('logs/watchlist.txt') as r:
+            syms=[line.strip() for line in r if line.strip()]
+          
+          # 解析时间框架（来自环境变量在此不可见，统一用 1/5）
+          tfs=[TimeFrame.ONE_MIN, TimeFrame.FIVE_MIN]
+          
+          for i,s in enumerate(syms,1):
+            bars=f.fetch_stock_multiframe_akshare(s, days=3, timeframes=tfs)
+            if any(bars.values()):
+              f.save_multiframe_bars(s, bars)
+            if i % 50 == 0:
+              print(f"已处理候选 {i}/{len(syms)} ...")
+          print("✓ 候选股票1f/5f更新完成")
+          EOF
       
       - name: 实时采集当前行情
         run: |
@@ -129,7 +194,7 @@ jobs:
             pass
 
           conn.close()
-          if (total_1f + total_5f + total_30f) < 50:
+            if (total_1f + total_5f + total_30f) < 50:
             print('\n⚠️  警告: 数据量不足，信号可能为空')
           EOF
       
