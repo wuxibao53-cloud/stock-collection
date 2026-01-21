@@ -68,9 +68,9 @@ jobs:
         run: |
           MODE="${{ github.event.inputs.mode || 'all' }}"
           DAYS="${{ github.event.inputs.history_days || '3' }}"
-          # 定时任务默认仅拉取30f，手动可覆盖为更多时间框架（见下一步）
-          echo "📊 基线：获取最近 ${DAYS} 天 30f 历史K线（模式: ${MODE}）..."
-          python3 multi_timeframe_fetcher.py --db logs/quotes.db --days ${DAYS} --mode ${MODE} --timeframes 30 2>&1 | tee logs/history_fetch_30f.log
+          WORKERS="15"  # 云端用15个线程，足够快且不过载
+          echo "📊 基线：获取最近 ${DAYS} 天 30f 历史K线（模式: ${MODE}，${WORKERS}线程）..."
+          python3 multi_timeframe_fetcher.py --db logs/quotes.db --days ${DAYS} --mode ${MODE} --timeframes 30 --workers ${WORKERS} 2>&1 | tee logs/history_fetch_30f.log
 
       - name: 生成候选股票列表（基于30f分型）
         run: |

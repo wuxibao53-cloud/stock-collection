@@ -9,6 +9,7 @@
 3. 分型检测与信号识别
 4. 买卖点建议与风险提示
 5. 持仓监控：买入后进行5f/1f区间套监控
+6. 多线程并发获取（提高效率）
 """
 
 import sqlite3
@@ -17,6 +18,8 @@ from datetime import datetime, timedelta, time as datetime_time
 from typing import List, Dict, Optional
 import time as time_module
 from enum import Enum
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 try:
     import akshare as ak
@@ -324,8 +327,8 @@ class MultiTimeframeDataFetcher:
                 'take_profit': current_price * 0.95,
             }
     
-    def fetch_all_a_stocks_multiframe(self, days: int = 5, batch_size: int = 50, timeframes: List[TimeFrame] = None):
-        """获取全部A股多时间框架历史数据"""
+    def fetch_all_a_stocks_multiframe(self, days: int = 5, batch_size: int = 50, timeframes: List[TimeFrame] = None, max_workers: int = 10):
+        """获取全部A股多时间框架历史数据（支持多线程并发）"""
         from full_a_stock_collector import StockListManager
         
         if timeframes is None:
@@ -342,54 +345,66 @@ class MultiTimeframeDataFetcher:
         
         filtered_count = len(all_stocks) - len(stock_list)
         if filtered_count > 0:
-            logger.info(f"已过滤 {filtered_count} 个指数代码（指数不支持分钟K线）")
+            logger.info(f"已过滤 {filtered_count} 个指数代码")
         
-        total_success = 0
-        total_failed = 0
+        logger.info(f"\n{'='*70}")
+        logger.info(f"开始并发获取 {len(stock_list)} 只A股数据（{max_workers}个线程）")
+        logger.info(f"{'='*70}\n")
         
-        tf_str = '/'.join([f"{tf.value}f" for tf in timeframes])
-        logger.info(f"开始获取 {len(stock_list)} 只A股数据（{tf_str}）...\n")
+        # 统计锁（线程安全）
+        stats_lock = threading.Lock()
+        stats = {'success': 0, 'failed': 0, 'processed': 0}
         
-        for i in range(0, len(stock_list), batch_size):
-            batch = stock_list[i:i+batch_size]
-            batch_num = i // batch_size + 1
-            batch_success = 0
-            batch_failed = 0
-            
-            logger.info(f"━━━ 第 {batch_num} 批 ({len(batch)}只) ━━━")
-            
-            for idx, stock in enumerate(batch, 1):
-                symbol = stock.symbol
+        def process_stock(stock):
+            """处理单只股票的线程函数"""
+            symbol = stock.symbol
+            try:
+                bars_dict = self.fetch_stock_multiframe_akshare(symbol, days, timeframes)
                 
-                try:
-                    bars_dict = self.fetch_stock_multiframe_akshare(symbol, days, timeframes)
+                if any(bars_dict.values()):
+                    self.save_multiframe_bars(symbol, bars_dict)
+                    with stats_lock:
+                        stats['success'] += 1
+                    return (symbol, True)
+                else:
+                    with stats_lock:
+                        stats['failed'] += 1
+                    return (symbol, False)
                     
-                    if any(bars_dict.values()):
-                        self.save_multiframe_bars(symbol, bars_dict)
-                        total_success += 1
-                        batch_success += 1
-                    else:
-                        total_failed += 1
-                        batch_failed += 1
-                    
-                    # 每10只显示一次进度
-                    if idx % 10 == 0:
-                        logger.info(f"  进度: {idx}/{len(batch)} | 成功: {batch_success} | 跳过: {batch_failed}")
-                    
-                    if idx % 5 == 0:
-                        time_module.sleep(0.5)
-                    
-                except Exception as e:
-                    logger.debug(f"  {symbol} 异常: {e}")
-                    total_failed += 1
-                    batch_failed += 1
-            
-            # 批次完成汇总
-            logger.info(f"  ✓ 第{batch_num}批完成: 成功 {batch_success}/{len(batch)} | 累计: {total_success}/{len(stock_list)}\n")
+            except Exception as e:
+                logger.debug(f"{symbol} 异常: {e}")
+                with stats_lock:
+                    stats['failed'] += 1
+                return (symbol, False)
         
-        logger.info(f"\n{'='*60}")
-        logger.info(f"全部完成：成功 {total_success} | 跳过 {total_failed} | 总计 {len(stock_list)}")
-        logger.info(f"{'='*60}\n")
+        # 使用ThreadPoolExecutor进行并发处理
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(process_stock, stock): stock for stock in stock_list}
+            
+            start_time = time_module.time()
+            
+            for i, future in enumerate(as_completed(futures), 1):
+                with stats_lock:
+                    stats['processed'] = i
+                    current = stats.copy()
+                
+                # 每50只显示一次进度
+                if i % 50 == 0:
+                    elapsed = time_module.time() - start_time
+                    rate = i / elapsed if elapsed > 0 else 0
+                    eta = (len(stock_list) - i) / rate if rate > 0 else 0
+                    
+                    logger.info(f"进度: {i}/{len(stock_list)} | 成功: {current['success']} | 跳过: {current['failed']} | 速度: {rate:.1f}个/秒 | ETA: {eta:.0f}秒")
+        
+        elapsed = time_module.time() - start_time
+        
+        logger.info(f"\n{'='*70}")
+        logger.info(f"✓ 全部完成")
+        logger.info(f"  成功获取: {stats['success']}")
+        logger.info(f"  跳过失败: {stats['failed']}")
+        logger.info(f"  耗时: {elapsed:.1f}秒")
+        logger.info(f"  平均速度: {len(stock_list)/elapsed:.1f}个/秒")
+        logger.info(f"{'='*70}\n")
 
 
 def main():
@@ -401,6 +416,7 @@ def main():
     parser.add_argument('--symbol', type=str, help='指定股票代码')
     parser.add_argument('--mode', choices=['hot', 'all'], default='all', help='采集模式')
     parser.add_argument('--timeframes', nargs='+', default=['1', '5', '30'], help='时间框架')
+    parser.add_argument('--workers', type=int, default=10, help='并发线程数（默认10，建议5-20）')
     
     args = parser.parse_args()
     
@@ -408,7 +424,8 @@ def main():
     fetcher = MultiTimeframeDataFetcher(args.db)
     
     logger.info(f"当前时间框架: {', '.join([f'{tf.value}f' for tf in timeframes])}")
-    logger.info(f"最大重试次数: {fetcher.max_retries}\n")
+    logger.info(f"最大重试次数: {fetcher.max_retries}")
+    logger.info(f"并发线程数: {args.workers}\n")
     
     if args.symbol:
         logger.info(f"获取单只股票 {args.symbol}...")
@@ -421,7 +438,7 @@ def main():
                 logger.info(f"检测到 {len(fractals)} 个分型")
     
     elif args.mode == 'all':
-        fetcher.fetch_all_a_stocks_multiframe(args.days, timeframes=timeframes)
+        fetcher.fetch_all_a_stocks_multiframe(args.days, timeframes=timeframes, max_workers=args.workers)
     
     else:
         hot_stocks = ['sh600519', 'sz000001', 'sz300750']
