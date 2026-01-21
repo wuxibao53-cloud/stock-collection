@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-多时间框架K线数据获取器 + 交易时间策略 + 实时监控系统
+多时间框架K线数据获取器 + API池轮转 + 自动故障转移
 
 核心功能：
 1. 支持1f、5f、30f多时间框架数据获取
-2. 智能重试机制（最多3次重试，间隔递增）
-3. 分型检测与信号识别
-4. 买卖点建议与风险提示
-5. 持仓监控：买入后进行5f/1f区间套监控
-6. 多线程并发获取（提高效率）
+2. API池轮转（1000个备用API/代理）
+3. 自动故障检测与切换
+4. 智能重试机制（最多3次重试，间隔递增）
+5. 多线程并发获取（提高效率）
 """
 
 import sqlite3
@@ -31,6 +30,9 @@ except ImportError:
 
 import pandas as pd
 
+# 导入API池管理器
+from api_pool_manager import get_api_pool, get_retry_strategy
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - [%(levelname)s] - %(message)s'
@@ -44,33 +46,59 @@ class TimeFrame(Enum):
     FIVE_MIN = '5'     # 5分钟
     THIRTY_MIN = '30'  # 30分钟
 
-
-class MultiTimeframeDataFetcher:
-    """多时间框架K线数据获取器"""
+ - 支持API池轮转"""
     
-    def __init__(self, db_path: str = 'logs/quotes.db'):
+    def __init__(self, db_path: str = 'logs/quotes.db', use_api_pool: bool = True):
         self.db_path = db_path
         self.max_retries = 3  # 最多重试次数
         self.timeframes = [TimeFrame.ONE_MIN, TimeFrame.FIVE_MIN, TimeFrame.THIRTY_MIN]
         self.api_lock = threading.Lock()  # API限流锁（防止并发过高导致连接错误）
         self.api_call_interval = 0.5  # API调用间隔（秒）
+        
+        # API池支持
+        self.use_api_pool = use_api_pool
+        if use_api_pool:
+            try:
+                self.api_pool = get_api_pool()
+                self.retry_strategy = get_retry_strategy()
+                logger.info("✓ API池管理器已启用（支持1000个备用API轮转）")
+            except Exception as e:
+                logger.warning(f"⚠️  API池加载失败: {e}，将使用直连模式")
+                self.use_api_pool = False
+        Frame.FIVE_MIN, TimeFrame.THIRTY_MIN]
+        self.api_lock = threading.Lock()  # API限流锁（防止并发过高导致连接错误）
+        self.api_call_interval = 0.5  # API调用间隔（秒）
         self._init_db()
     
     def _api_call_safe(self, symbol, period, start_date, end_date):
-        """线程安全的API调用（带限流）"""
+        """线程安全的API调用（带限流 + API池支持）"""
         with self.api_lock:
             # 随机延迟0-200ms，避免完全同步
             time_module.sleep(random.uniform(0, 0.2) + self.api_call_interval)
             
             try:
-                df = ak.stock_zh_a_hist_min_em(
-                    symbol=symbol,
-                    period=period,
-                    adjust='',
-                    start_date=start_date.strftime('%Y-%m-%d 09:30:00'),
-                    end_date=end_date.strftime('%Y-%m-%d 15:00:00'),
-                    timeout=10  # 设置超时10秒
-                )
+                # 如果启用了API池，使用重试策略
+                if self.use_api_pool:
+                    df = self.retry_strategy.call_with_retry(
+                        ak.stock_zh_a_hist_min_em,
+                        symbol=symbol,
+                        period=period,
+                        adjust='',
+                        start_date=start_date.strftime('%Y-%m-%d 09:30:00'),
+                        end_date=end_date.strftime('%Y-%m-%d 15:00:00'),
+                        timeout=10
+                    )
+                else:
+                    # 直连模式（无API池）
+                    df = ak.stock_zh_a_hist_min_em(
+                        symbol=symbol,
+                        period=period,
+                        adjust='',
+                        start_date=start_date.strftime('%Y-%m-%d 09:30:00'),
+                        end_date=end_date.strftime('%Y-%m-%d 15:00:00'),
+                        timeout=10
+                    )
+                
                 return df
             except Exception as e:
                 raise e

@@ -1,0 +1,43 @@
+{
+  "apis": [
+    {
+      "id": 1,
+      "type": "direct",
+      "name": "Direct AKShare (No Proxy)",
+      "enabled": true
+    },
+    {
+      "id": 2,
+      "type": "proxy",
+      "url": "http://proxy1.example.com:8080",
+      "name": "Proxy 1",
+      "enabled": true
+    },
+    {
+      "id": 3,
+      "type": "proxy",
+      "url": "http://proxy2.example.com:8080",
+      "name": "Proxy 2",
+      "enabled": true
+    },
+    {
+      "id": 4,
+      "type": "proxy",
+      "url": "http://proxy3.example.com:8080",
+      "name": "Proxy 3",
+      "enabled": true
+    },
+    {
+      "id": 5,
+      "type": "proxy",
+      "url": "http://proxy4.example.com:8080",
+      "name": "Proxy 4",
+      "enabled": true
+    }
+  ],
+  "notes": "添加更多API/代理到这个列表中，最多支持1000个。type可以是 'direct' 或 'proxy'",
+  "strategy": "round_robin",
+  "retry_count": 3,
+  "retry_delay": 0.5,
+  "fallback_to_direct": true
+}
