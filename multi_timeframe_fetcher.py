@@ -20,6 +20,7 @@ import time as time_module
 from enum import Enum
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
+import random
 
 try:
     import akshare as ak
@@ -51,7 +52,28 @@ class MultiTimeframeDataFetcher:
         self.db_path = db_path
         self.max_retries = 3  # 最多重试次数
         self.timeframes = [TimeFrame.ONE_MIN, TimeFrame.FIVE_MIN, TimeFrame.THIRTY_MIN]
+        self.api_lock = threading.Lock()  # API限流锁（防止并发过高导致连接错误）
+        self.api_call_interval = 0.5  # API调用间隔（秒）
         self._init_db()
+    
+    def _api_call_safe(self, symbol, period, start_date, end_date):
+        """线程安全的API调用（带限流）"""
+        with self.api_lock:
+            # 随机延迟0-200ms，避免完全同步
+            time_module.sleep(random.uniform(0, 0.2) + self.api_call_interval)
+            
+            try:
+                df = ak.stock_zh_a_hist_min_em(
+                    symbol=symbol,
+                    period=period,
+                    adjust='',
+                    start_date=start_date.strftime('%Y-%m-%d 09:30:00'),
+                    end_date=end_date.strftime('%Y-%m-%d 15:00:00'),
+                    timeout=10  # 设置超时10秒
+                )
+                return df
+            except Exception as e:
+                raise e
     
     def _init_db(self):
         """初始化数据库 - 支持多个时间框架表"""
@@ -134,15 +156,17 @@ class MultiTimeframeDataFetcher:
                 
                 # API调用本身可能抛异常或返回奇怪的值
                 try:
-                    df = ak.stock_zh_a_hist_min_em(
-                        symbol=clean_symbol,
-                        period=period,
-                        adjust='',
-                        start_date=start_date.strftime('%Y-%m-%d 09:30:00'),
-                        end_date=end_date.strftime('%Y-%m-%d 15:00:00')
-                    )
+                    df = self._api_call_safe(clean_symbol, period, start_date, end_date)
+                except ConnectionError as e:
+                    logger.warning(f"{symbol} {tf.value}f ConnectionError（连接错误）: {e}")
+                    # ConnectionError通常是临时性的，继续重试逻辑
+                    continue
+                except TimeoutError as e:
+                    logger.warning(f"{symbol} {tf.value}f TimeoutError（超时）: {e}")
+                    continue
                 except Exception as e:
-                    logger.warning(f"{symbol} {tf.value}f API调用异常: {type(e).__name__}")
+                    # 其他类型异常也记录但不中断
+                    logger.debug(f"{symbol} {tf.value}f API调用异常: {type(e).__name__} - {str(e)[:100]}")
                     continue
                 
                 # 健壮性检查：处理None、空数据、格式错误

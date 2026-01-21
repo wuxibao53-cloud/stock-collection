@@ -3,7 +3,11 @@ name: A股缠论信号云端分析
 on:
   # 定时运行：工作日两次（UTC换算为中国时区 +8）
   schedule:
-    # 开盘前 09:15 CST → 01:15 UTC
+    # 开盘前 09:15 CST → 01:15 UTC (UTC+8，所以9:15-8=1:15)
+    # 但这是UTC，北京时间应该是 09:15，所以UTC是 09:15-8=01:15 UTC
+    # 实际上：北京时间09:15 = UTC 01:15（冬令时）或 UTC 00:15（夏令时）
+    # GitHub Actions基于UTC，所以应该用 01:15 UTC (冬令时) 或 00:15 UTC (夏令时)
+    # 统一用 01:15 UTC 确保在09:15左右触发
     - cron: '15 1 * * 1-5'
     # 闭盘后 15:10 CST → 07:10 UTC
     - cron: '10 7 * * 1-5'
@@ -23,6 +27,11 @@ on:
         description: '历史数据天数'
         required: false
         default: '3'
+        type: string
+      workers:
+        description: '并发线程数（推荐20）'
+        required: false
+        default: '20'
         type: string
       timeframes:
         description: '时间框架（空格分隔，如：1 5 30）'
@@ -64,7 +73,7 @@ jobs:
       
       # 数据库初始化由multi_timeframe_fetcher.py的__init__自动完成
       
-      - name: 获取30f历史K线（全量A股，基线）
+      - name: 获取30f${{ github.event.inputs.workers || '20' }}"  # 支持20线程（手动触发可覆盖）
         run: |
           MODE="${{ github.event.inputs.mode || 'all' }}"
           DAYS="${{ github.event.inputs.history_days || '3' }}"

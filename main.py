@@ -80,7 +80,7 @@ class ChanTradingSystem:
             logger.error("股票过滤失败")
             return 0
     
-    def step2_fetch_30f_baseline(self, days: int = 30, workers: int = 15):
+    def step2_fetch_30f_baseline(self, days: int = 30, workers: int = 20):
         """步骤2：采集30f基线"""
         logger.info("\n" + "="*70)
         logger.info("【步骤2】采集30f基线（全量）")
@@ -203,7 +203,7 @@ class ChanTradingSystem:
                 return
             
             # 步骤2: 采集30f
-            self.step2_fetch_30f_baseline(days=30, workers=15)
+            self.step2_fetch_30f_baseline(days=30, workers=20)
             
             # 步骤3: 分析30f
             watchlist = self.step3_analyze_30f_generate_watchlist()
