@@ -71,39 +71,42 @@ class MultiTimeframeDataFetcher:
         self._init_db()
     
     def _api_call_safe(self, symbol, period, start_date, end_date):
-        """线程安全的API调用（带限流 + API池支持）"""
+        """线程安全的API调用（带限流 + API池支持）
+        
+        策略：直连为主，API池为辅
+        - 优先尝试直连（不受冷却影响）
+        - 如果直连失败，不标记为API错误（避免冷却）
+        - API池仅用于备用
+        """
         with self.api_lock:
             # 随机延迟0-200ms，避免完全同步
             time_module.sleep(random.uniform(0, 0.2) + self.api_call_interval)
             
+            # 首先尝试直连（最可靠）
             try:
-                # 如果启用了API池，尝试使用重试策略
-                if self.use_api_pool:
-                    # 获取当前API
-                    api = self.api_pool.get_current_api()
-                    if api:
-                        api_id = api.get('id', '?')
-                        
-                        # 尝试调用
-                        try:
-                            df = ak.stock_zh_a_hist_min_em(
-                                symbol=symbol,
-                                period=period,
-                                adjust='',
-                                start_date=start_date.strftime('%Y-%m-%d 09:30:00'),
-                                end_date=end_date.strftime('%Y-%m-%d 15:00:00'),
-                                timeout=10
-                            )
-                            # 成功
-                            self.api_pool.mark_api_success(api_id)
-                            return df
-                        except Exception as api_error:
-                            # API调用失败
-                            self.api_pool.mark_api_failed(api_id, str(api_error))
-                            # 如果API池禁用了代理轮转，回退到直连
-                            logger.debug(f"API #{api_id} 失败，尝试直连...")
-                
-                # 直连模式（API池禁用或全部API失败）
+                df = ak.stock_zh_a_hist_min_em(
+                    symbol=symbol,
+                    period=period,
+                    adjust='',
+                    start_date=start_date.strftime('%Y-%m-%d 09:30:00'),
+                    end_date=end_date.strftime('%Y-%m-%d 15:00:00'),
+                    timeout=10
+                )
+                return df
+            except Exception as direct_error:
+                # 直连失败，这是正常的网络波动，不应该冷却
+                logger.debug(f"{symbol} {period}f 直连失败: {type(direct_error).__name__}")
+                # 不要标记为API错误，避免进入冷却期
+                pass
+        
+        # 直连失败后，可以尝试API池中的代理
+        # 但由于目前没有有效的代理，暂时跳过
+        # 在未来集成真实代理时，可以在这里添加代理轮转逻辑
+        
+        # 最后再次尝试直连（重试一次）
+        with self.api_lock:
+            time_module.sleep(0.5)  # 等待0.5秒再试
+            try:
                 df = ak.stock_zh_a_hist_min_em(
                     symbol=symbol,
                     period=period,
