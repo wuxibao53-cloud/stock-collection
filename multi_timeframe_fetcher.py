@@ -55,7 +55,7 @@ class MultiTimeframeDataFetcher:
         self.max_retries = 3  # 最多重试次数
         self.timeframes = [TimeFrame.ONE_MIN, TimeFrame.FIVE_MIN, TimeFrame.THIRTY_MIN]
         self.api_lock = threading.Lock()  # API限流锁（防止并发过高导致连接错误）
-        self.api_call_interval = 0.5  # API调用间隔（秒）
+        self.api_call_interval = 1.0  # API调用间隔（秒） - 增加到1秒避免限流
         
         # API池支持
         self.use_api_pool = use_api_pool
@@ -79,8 +79,8 @@ class MultiTimeframeDataFetcher:
         - API池仅用于备用
         """
         with self.api_lock:
-            # 随机延迟0-200ms，避免完全同步
-            time_module.sleep(random.uniform(0, 0.2) + self.api_call_interval)
+            # 延迟1秒（避免并发冲击）+ 随机0-200ms
+            time_module.sleep(self.api_call_interval + random.uniform(0, 0.2))
             
             # 首先尝试直连（最可靠）
             try:
@@ -105,7 +105,7 @@ class MultiTimeframeDataFetcher:
         
         # 最后再次尝试直连（重试一次）
         with self.api_lock:
-            time_module.sleep(0.5)  # 等待0.5秒再试
+            time_module.sleep(1.0)  # 等待1秒再试
             try:
                 df = ak.stock_zh_a_hist_min_em(
                     symbol=symbol,
