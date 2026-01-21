@@ -3,41 +3,24 @@
     {
       "id": 1,
       "type": "direct",
-      "name": "Direct AKShare (No Proxy)",
-      "enabled": true
+      "name": "Direct AKShare (主直连)",
+      "enabled": true,
+      "priority": 1
     },
     {
       "id": 2,
-      "type": "proxy",
-      "url": "http://proxy1.example.com:8080",
-      "name": "Proxy 1",
-      "enabled": true
-    },
-    {
-      "id": 3,
-      "type": "proxy",
-      "url": "http://proxy2.example.com:8080",
-      "name": "Proxy 2",
-      "enabled": true
-    },
-    {
-      "id": 4,
-      "type": "proxy",
-      "url": "http://proxy3.example.com:8080",
-      "name": "Proxy 3",
-      "enabled": true
-    },
-    {
-      "id": 5,
-      "type": "proxy",
-      "url": "http://proxy4.example.com:8080",
-      "name": "Proxy 4",
-      "enabled": true
+      "type": "direct",
+      "name": "Direct AKShare (备用直连)",
+      "enabled": true,
+      "priority": 2
     }
   ],
-  "notes": "添加更多API/代理到这个列表中，最多支持1000个。type可以是 'direct' 或 'proxy'",
-  "strategy": "round_robin",
-  "retry_count": 3,
-  "retry_delay": 0.5,
-  "fallback_to_direct": true
+  "notes": "注意：代理2-5已禁用（占位符）。请从快代理/芝麻代理等获取真实代理后替换。即使没有代理，系统也能通过直连模式工作。",
+  "strategy": {
+    "type": "round_robin",
+    "retry_count": 3,
+    "retry_delay": 0.5,
+    "fallback_to_direct": true,
+    "cooldown_period_minutes": 5
+  }
 }

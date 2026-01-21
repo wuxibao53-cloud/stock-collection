@@ -73,11 +73,13 @@ jobs:
       
       # 数据库初始化由multi_timeframe_fetcher.py的__init__自动完成
       
-      - name: 获取30f${{ github.event.inputs.workers || '20' }}"  # 支持20线程（手动触发可覆盖）
+      - name: 获取30f历史K线（全量A股，基线）
         run: |
           MODE="${{ github.event.inputs.mode || 'all' }}"
           DAYS="${{ github.event.inputs.history_days || '3' }}"
-          WORKERS="15"  # 云端用15个线程，足够快且不过载
+          WORKERS="${{ github.event.inputs.workers || '20' }}"  # 支持20线程（手动触发可覆盖，默认20）
+          echo "📊 基线：获取最近 ${DAYS} 天 30f 历史K线（模式: ${MODE}，${WORKERS}线程）..."
+          python3 multi_timeframe_fetcher.py --db logs/quotes.db --days ${DAYS} --mode ${MODE} --timeframes 30 --workers ${WORKERS} 2>&1 | tee logs/history_fetch_30f.log
           echo "📊 基线：获取最近 ${DAYS} 天 30f 历史K线（模式: ${MODE}，${WORKERS}线程）..."
           python3 multi_timeframe_fetcher.py --db logs/quotes.db --days ${DAYS} --mode ${MODE} --timeframes 30 --workers ${WORKERS} 2>&1 | tee logs/history_fetch_30f.log
 

@@ -77,28 +77,41 @@ class MultiTimeframeDataFetcher:
             time_module.sleep(random.uniform(0, 0.2) + self.api_call_interval)
             
             try:
-                # 如果启用了API池，使用重试策略
+                # 如果启用了API池，尝试使用重试策略
                 if self.use_api_pool:
-                    df = self.retry_strategy.call_with_retry(
-                        ak.stock_zh_a_hist_min_em,
-                        symbol=symbol,
-                        period=period,
-                        adjust='',
-                        start_date=start_date.strftime('%Y-%m-%d 09:30:00'),
-                        end_date=end_date.strftime('%Y-%m-%d 15:00:00'),
-                        timeout=10
-                    )
-                else:
-                    # 直连模式（无API池）
-                    df = ak.stock_zh_a_hist_min_em(
-                        symbol=symbol,
-                        period=period,
-                        adjust='',
-                        start_date=start_date.strftime('%Y-%m-%d 09:30:00'),
-                        end_date=end_date.strftime('%Y-%m-%d 15:00:00'),
-                        timeout=10
-                    )
+                    # 获取当前API
+                    api = self.api_pool.get_current_api()
+                    if api:
+                        api_id = api.get('id', '?')
+                        
+                        # 尝试调用
+                        try:
+                            df = ak.stock_zh_a_hist_min_em(
+                                symbol=symbol,
+                                period=period,
+                                adjust='',
+                                start_date=start_date.strftime('%Y-%m-%d 09:30:00'),
+                                end_date=end_date.strftime('%Y-%m-%d 15:00:00'),
+                                timeout=10
+                            )
+                            # 成功
+                            self.api_pool.mark_api_success(api_id)
+                            return df
+                        except Exception as api_error:
+                            # API调用失败
+                            self.api_pool.mark_api_failed(api_id, str(api_error))
+                            # 如果API池禁用了代理轮转，回退到直连
+                            logger.debug(f"API #{api_id} 失败，尝试直连...")
                 
+                # 直连模式（API池禁用或全部API失败）
+                df = ak.stock_zh_a_hist_min_em(
+                    symbol=symbol,
+                    period=period,
+                    adjust='',
+                    start_date=start_date.strftime('%Y-%m-%d 09:30:00'),
+                    end_date=end_date.strftime('%Y-%m-%d 15:00:00'),
+                    timeout=10
+                )
                 return df
             except Exception as e:
                 raise e
