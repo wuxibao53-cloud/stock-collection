@@ -76,12 +76,36 @@ jobs:
       - name: 获取30f历史K线（全量A股，基线）
         run: |
           MODE="${{ github.event.inputs.mode || 'all' }}"
-          DAYS="${{ github.event.inputs.history_days || '3' }}"
+          DAYS="${{ github.event.inputs.history_days || '30' }}"
           WORKERS="${{ github.event.inputs.workers || '20' }}"  # 支持20线程（手动触发可覆盖，默认20）
           echo "📊 基线：获取最近 ${DAYS} 天 30f 历史K线（模式: ${MODE}，${WORKERS}线程）..."
           python3 multi_timeframe_fetcher.py --db logs/quotes.db --days ${DAYS} --mode ${MODE} --timeframes 30 --workers ${WORKERS} 2>&1 | tee logs/history_fetch_30f.log
-          echo "📊 基线：获取最近 ${DAYS} 天 30f 历史K线（模式: ${MODE}，${WORKERS}线程）..."
-          python3 multi_timeframe_fetcher.py --db logs/quotes.db --days ${DAYS} --mode ${MODE} --timeframes 30 --workers ${WORKERS} 2>&1 | tee logs/history_fetch_30f.log
+          
+          # 数据采集后诊断
+          echo ""
+          echo "📊 数据库诊断："
+          python3 << 'DIAG'
+          import sqlite3
+          db = 'logs/quotes.db'
+          conn = sqlite3.connect(db)
+          cur = conn.cursor()
+          
+          # 检查表是否存在
+          cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'minute_bars_%'")
+          tables = cur.fetchall()
+          print(f"✓ 数据表数量: {len(tables)}")
+          
+          # 检查30f数据
+          cur.execute("SELECT COUNT(DISTINCT symbol) FROM minute_bars_30f")
+          symbol_count = cur.fetchone()[0]
+          print(f"✓ 30f股票数: {symbol_count}")
+          
+          cur.execute("SELECT COUNT(*) FROM minute_bars_30f")
+          bar_count = cur.fetchone()[0]
+          print(f"✓ 30f K线数: {bar_count}")
+          
+          conn.close()
+          DIAG
 
       - name: 生成候选股票列表（基于30f分型）
         run: |
@@ -90,12 +114,36 @@ jobs:
           from multi_timeframe_fetcher import MultiTimeframeDataFetcher, TimeFrame
           
           db='logs/quotes.db'
-          f = MultiTimeframeDataFetcher(db)
+          
+          # 先检查数据库状态
           conn = sqlite3.connect(db)
           cur = conn.cursor()
-          cur.execute('SELECT DISTINCT symbol FROM minute_bars_30f')
+          cur.execute('SELECT COUNT(*) FROM minute_bars_30f')
+          total_bars = cur.fetchone()[0]
+          cur.execute('SELECT COUNT(DISTINCT symbol) FROM minute_bars_30f')
+          total_symbols = cur.fetchone()[0]
+          conn.close()
+          
+          print(f"📊 30f数据库状态: {total_symbols} 只股票, {total_bars} 条K线")
+          
+          if total_symbols == 0:
+            print("❌ 没有数据！无法生成候选")
+            with open('logs/watchlist.txt','w') as w:
+              pass
+            print("✓ 候选股票数: 0 (已写入 logs/watchlist.txt)")
+            exit(0)
+          
+          # 初始化分析器
+          f = MultiTimeframeDataFetcher(db)
+          
+          # 读取所有股票符号
+          conn = sqlite3.connect(db)
+          cur = conn.cursor()
+          cur.execute('SELECT DISTINCT symbol FROM minute_bars_30f ORDER BY symbol')
           symbols = [row[0] for row in cur.fetchall()]
           conn.close()
+          
+          print(f"📊 扫描 {len(symbols)} 只股票的30f分型...")
           
           watch = []
           for i,s in enumerate(symbols,1):
@@ -103,40 +151,67 @@ jobs:
             if fr:
               watch.append(s)
             if i % 200 == 0:
-              print(f"扫描进度 {i}/{len(symbols)}，候选 {len(watch)} 只...")
+              print(f"  进度: {i}/{len(symbols)}, 候选: {len(watch)} 只")
           
+          # 保存结果
           with open('logs/watchlist.txt','w') as w:
             for s in watch:
               w.write(s+'\n')
+          
           print(f"✓ 候选股票数: {len(watch)} (已写入 logs/watchlist.txt)")
+          if len(watch) > 0:
+            print(f"  前5只: {', '.join(watch[:5])}")
           EOF
 
       - name: 获取候选股票的1f/5f（精细化）
         run: |
-          # 手动触发可覆盖时间框架；默认仅对候选股获取 1 和 5
-          TF_INPUTS="${{ github.event.inputs.timeframes || '' }}"
-          if [ -z "$TF_INPUTS" ]; then TF_INPUTS="1 5"; fi
-          echo "🔎 对候选股票获取时间框架: $TF_INPUTS"
+          # 检查候选列表
+          if [ ! -f "logs/watchlist.txt" ] || [ ! -s "logs/watchlist.txt" ]; then
+            echo "⚠️  没有候选股票，跳过1f/5f采集"
+            exit 0
+          fi
+          
+          # 统计候选数量
+          WATCH_COUNT=$(wc -l < logs/watchlist.txt)
+          echo "📊 候选股票数: $WATCH_COUNT"
+          
+          # 如果没有候选，结束
+          if [ "$WATCH_COUNT" -eq 0 ]; then
+            echo "⚠️  没有候选股票，跳过1f/5f采集"
+            exit 0
+          fi
+          
+          echo "🔎 对 $WATCH_COUNT 只候选股票获取 1f/5f 数据..."
           python3 << 'EOF'
           import sqlite3
           from multi_timeframe_fetcher import MultiTimeframeDataFetcher, TimeFrame
           
           db='logs/quotes.db'
           f = MultiTimeframeDataFetcher(db)
+          
           # 读取候选列表
           with open('logs/watchlist.txt') as r:
-            syms=[line.strip() for line in r if line.strip()]
+            syms = [line.strip() for line in r if line.strip()]
           
-          # 解析时间框架（来自环境变量在此不可见，统一用 1/5）
-          tfs=[TimeFrame.ONE_MIN, TimeFrame.FIVE_MIN]
+          print(f"📊 处理 {len(syms)} 只候选股票...")
           
-          for i,s in enumerate(syms,1):
-            bars=f.fetch_stock_multiframe_akshare(s, days=3, timeframes=tfs)
-            if any(bars.values()):
-              f.save_multiframe_bars(s, bars)
-            if i % 50 == 0:
-              print(f"已处理候选 {i}/{len(syms)} ...")
-          print("✓ 候选股票1f/5f更新完成")
+          # 采集1f和5f
+          tfs = [TimeFrame.ONE_MIN, TimeFrame.FIVE_MIN]
+          
+          success_count = 0
+          for i, s in enumerate(syms, 1):
+            try:
+              bars = f.fetch_stock_multiframe_akshare(s, days=3, timeframes=tfs)
+              if any(bars.values()):
+                f.save_multiframe_bars(s, bars)
+                success_count += 1
+            except Exception as e:
+              pass
+            
+            if i % 20 == 0:
+              print(f"  进度: {i}/{len(syms)}, 成功: {success_count}")
+          
+          print(f"✓ 候选股票1f/5f更新完成 (成功: {success_count}/{len(syms)})")
           EOF
       
       - name: 实时采集当前行情
