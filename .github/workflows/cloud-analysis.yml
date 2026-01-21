@@ -62,28 +62,7 @@ jobs:
       - name: 创建日志目录
         run: mkdir -p logs
       
-      - name: 初始化数据库
-        run: |
-          python3 << 'EOF'
-          import sqlite3
-          conn = sqlite3.connect('logs/quotes.db')
-          cursor = conn.cursor()
-          cursor.execute('PRAGMA journal_mode=WAL')
-          cursor.execute('''
-            CREATE TABLE IF NOT EXISTS minute_bars (
-              id INTEGER PRIMARY KEY,
-              symbol TEXT NOT NULL,
-              minute TEXT NOT NULL,
-              open REAL, high REAL, low REAL, close REAL,
-              volume INTEGER, amount REAL,
-              UNIQUE(symbol, minute)
-            )
-          ''')
-          cursor.execute('CREATE INDEX IF NOT EXISTS idx_symbol_minute ON minute_bars(symbol, minute DESC)')
-          conn.commit()
-          conn.close()
-          print('✓ 数据库初始化完成')
-          EOF
+      # 数据库初始化由multi_timeframe_fetcher.py的__init__自动完成
       
       - name: 获取30f历史K线（全量A股，基线）
         run: |
