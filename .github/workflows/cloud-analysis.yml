@@ -8,24 +8,24 @@ on:
   # 手动触发
   workflow_dispatch:
     inputs:
-      fetch_history:
-        description: '是否获取历史数据'
+      mode:
+        description: '分析模式'
         required: false
-        default: 'true'
+        default: 'all'
         type: choice
         options:
-          - 'true'
-          - 'false'
+          - all
+          - hot
       history_days:
         description: '历史数据天数'
         required: false
-        default: '5'
+        default: '3'
         type: string
 
 jobs:
   analyze:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 120
     
     env:
       HTTP_PROXY: ${{ secrets.HTTP_PROXY }}
@@ -73,16 +73,17 @@ jobs:
           "
       
       - name: 获取历史K线数据（AKShare）
-        if: github.event.inputs.fetch_history != 'false'
         run: |
-          DAYS="${{ github.event.inputs.history_days || '5' }}"
-          echo "📊 获取最近 ${DAYS} 天历史分钟K线..."
-          python3 historical_data_fetcher.py --db logs/quotes.db --days ${DAYS} 2>&1 | tee logs/history_fetch.log
+          MODE="${{ github.event.inputs.mode || 'all' }}"
+          DAYS="${{ github.event.inputs.history_days || '3' }}"
+          echo "📊 获取最近 ${DAYS} 天历史分钟K线（模式: ${MODE}）..."
+          python3 historical_data_fetcher.py --db logs/quotes.db --days ${DAYS} --mode ${MODE} 2>&1 | tee logs/history_fetch.log
       
       - name: 实时采集当前行情
         run: |
-          echo "🔄 采集实时行情..."
-          python3 full_a_stock_collector.py --db logs/quotes.db --mode hot --async 2>&1 | tee logs/realtime_collect.log || true
+          MODE="${{ github.event.inputs.mode || 'all' }}"
+          echo "🔄 采集实时行情（模式: ${MODE}）..."
+          python3 full_a_stock_collector.py --db logs/quotes.db --mode ${MODE} --async 2>&1 | tee logs/realtime_collect.log || true
       
       - name: 验证数据量
         run: |

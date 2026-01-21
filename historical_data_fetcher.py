@@ -217,8 +217,67 @@ class HistoricalDataFetcher:
         conn.commit()
         conn.close()
     
+    def fetch_all_a_stocks_history(self, days: int = 5, batch_size: int = 50):
+        """
+        获取全部A股历史数据（5000+）
+        
+        Args:
+            days: 天数
+            batch_size: 每批处理数量
+        """
+        from full_a_stock_collector import StockListManager
+        
+        stock_list = StockListManager.get_a_stock_list()
+        total_bars = 0
+        success_count = 0
+        failed_count = 0
+        
+        logger.info(f"开始获取 {len(stock_list)} 只A股历史数据（批处理 {batch_size}只/批）...")
+        
+        for i in range(0, len(stock_list), batch_size):
+            batch = stock_list[i:i+batch_size]
+            logger.info(f"处理第 {i//batch_size + 1} 批（{len(batch)}只）...")
+            
+            for stock in batch:
+                symbol = stock.symbol
+                
+                try:
+                    # 判断是否为指数
+                    is_index = symbol.startswith('sh000') or symbol.startswith('sz399')
+                    
+                    if is_index:
+                        bars = self.fetch_index_1min_akshare(symbol, days)
+                    else:
+                        bars = self.fetch_stock_1min_akshare(symbol, days)
+                    
+                    if bars:
+                        self.save_bars(bars)
+                        total_bars += len(bars)
+                        success_count += 1
+                    else:
+                        failed_count += 1
+                    
+                    # 限流：每5只股票休息0.5秒
+                    if (success_count + failed_count) % 5 == 0:
+                        time.sleep(0.5)
+                    
+                except Exception as e:
+                    logger.debug(f"{symbol} 失败: {e}")
+                    failed_count += 1
+            
+            # 批次间报告
+            logger.info(f"  已处理 {i+len(batch)}/{len(stock_list)}，成功 {success_count}，失败 {failed_count}")
+        
+        logger.info(f"\n{'='*70}")
+        logger.info(f"✓ 全量历史数据获取完成")
+        logger.info(f"总股票数: {len(stock_list)}")
+        logger.info(f"成功获取: {success_count}")
+        logger.info(f"失败/无数据: {failed_count}")
+        logger.info(f"总K线数: {total_bars}")
+        logger.info(f"{'='*70}\n")
+    
     def fetch_hot_stocks_history(self, days: int = 5):
-        """获取热门股票历史数据"""
+        """获取热门股票历史数据（快速测试用）"""
         hot_stocks = [
             ('sh000001', True),   # 上证指数
             ('sh000300', True),   # 沪深300
@@ -226,8 +285,6 @@ class HistoricalDataFetcher:
             ('sh600519', False),  # 茅台
             ('sz000001', False),  # 平安银行
             ('sz300750', False),  # 宁德时代
-            ('sh600036', False),  # 招商银行
-            ('sh601318', False),  # 中国平安
         ]
         
         total_bars = 0
@@ -243,13 +300,13 @@ class HistoricalDataFetcher:
                     self.save_bars(bars)
                     total_bars += len(bars)
                 
-                time.sleep(0.5)  # 限流
+                time.sleep(0.3)
                 
             except Exception as e:
                 logger.error(f"{symbol} 处理失败: {e}")
         
         logger.info(f"\n{'='*60}")
-        logger.info(f"✓ 历史数据获取完成")
+        logger.info(f"✓ 热门股历史数据获取完成")
         logger.info(f"总K线数: {total_bars}")
         logger.info(f"{'='*60}\n")
 
@@ -262,6 +319,8 @@ def main():
     parser.add_argument('--db', default='logs/quotes.db', help='数据库路径')
     parser.add_argument('--days', type=int, default=5, help='获取最近N天数据')
     parser.add_argument('--symbol', type=str, help='指定股票代码')
+    parser.add_argument('--mode', choices=['hot', 'all'], default='all',
+                       help='采集模式 (hot=热门股快速测试, all=全部A股)')
     
     args = parser.parse_args()
     
@@ -277,8 +336,11 @@ def main():
         
         if bars:
             fetcher.save_bars(bars)
+    elif args.mode == 'all':
+        # 全量A股
+        fetcher.fetch_all_a_stocks_history(args.days)
     else:
-        # 热门股
+        # 热门股（快速测试）
         fetcher.fetch_hot_stocks_history(args.days)
 
 
