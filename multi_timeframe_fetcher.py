@@ -119,7 +119,11 @@ class MultiTimeframeDataFetcher:
                 end_date = datetime.now()
                 start_date = end_date - timedelta(days=days)
                 
-                logger.info(f"获取 {symbol} {tf.value}f K线（尝试 {retry_count+1}/{self.max_retries+1}）...")
+                # 只在首次尝试或重试时打印详细日志
+                if retry_count == 0:
+                    logger.debug(f"获取 {symbol} {tf.value}f K线...")
+                else:
+                    logger.info(f"获取 {symbol} {tf.value}f K线（尝试 {retry_count+1}/{self.max_retries+1}）...")
                 
                 period = tf.value
                 
@@ -131,25 +135,42 @@ class MultiTimeframeDataFetcher:
                     end_date=end_date.strftime('%Y-%m-%d 15:00:00')
                 )
                 
-                if df is None or df.empty:
+                # 健壮性检查：处理None、空数据、格式错误
+                if df is None:
+                    logger.warning(f"{symbol} {tf.value}f API返回None")
+                    result[tf.value] = []
+                    continue
+                
+                if df.empty:
                     logger.warning(f"{symbol} {tf.value}f 无数据")
+                    result[tf.value] = []
+                    continue
+                
+                # 检查必需列是否存在
+                required_cols = ['时间', '开盘', '最高', '最低', '收盘', '成交量']
+                if not all(col in df.columns for col in required_cols):
+                    logger.warning(f"{symbol} {tf.value}f 数据格式异常，缺少必需列")
                     result[tf.value] = []
                     continue
                 
                 bars = []
                 for _, row in df.iterrows():
-                    bars.append({
-                        'symbol': symbol,
-                        'minute': row['时间'],
-                        'open': float(row['开盘']),
-                        'high': float(row['最高']),
-                        'low': float(row['最低']),
-                        'close': float(row['收盘']),
-                        'volume': int(row['成交量']),
-                        'amount': float(row['成交额']) if '成交额' in row else 0,
-                    })
+                    try:
+                        bars.append({
+                            'symbol': symbol,
+                            'minute': str(row['时间']),
+                            'open': float(row['开盘']),
+                            'high': float(row['最高']),
+                            'low': float(row['最低']),
+                            'close': float(row['收盘']),
+                            'volume': int(row['成交量']),
+                            'amount': float(row['成交额']) if '成交额' in row else 0,
+                        })
+                    except (ValueError, KeyError, TypeError) as e:
+                        logger.debug(f"{symbol} {tf.value}f 跳过异常行: {e}")
+                        continue
                 
-                logger.info(f"✓ {symbol} {tf.value}f 获取 {len(bars)} 条K线")
+                logger.debug(f"✓ {symbol} {tf.value}f 获取 {len(bars)} 条K线")
                 result[tf.value] = bars
                 time_module.sleep(0.2)
                 
@@ -294,13 +315,16 @@ class MultiTimeframeDataFetcher:
         total_success = 0
         total_failed = 0
         
-        logger.info(f"开始获取 {len(stock_list)} 只A股数据（支持1f/5f/30f）...\n")
+        tf_str = '/'.join([f"{tf.value}f" for tf in timeframes])
+        logger.info(f"开始获取 {len(stock_list)} 只A股数据（{tf_str}）...\n")
         
         for i in range(0, len(stock_list), batch_size):
             batch = stock_list[i:i+batch_size]
             batch_num = i // batch_size + 1
+            batch_success = 0
+            batch_failed = 0
             
-            logger.info(f"第 {batch_num} 批（{len(batch)}只 / {len(stock_list)}只）")
+            logger.info(f"━━━ 第 {batch_num} 批 ({len(batch)}只) ━━━")
             
             for idx, stock in enumerate(batch, 1):
                 symbol = stock.symbol
@@ -311,18 +335,29 @@ class MultiTimeframeDataFetcher:
                     if any(bars_dict.values()):
                         self.save_multiframe_bars(symbol, bars_dict)
                         total_success += 1
-                        logger.info(f"  [{idx}/{len(batch)}] {symbol} ✓")
+                        batch_success += 1
                     else:
                         total_failed += 1
+                        batch_failed += 1
+                    
+                    # 每10只显示一次进度
+                    if idx % 10 == 0:
+                        logger.info(f"  进度: {idx}/{len(batch)} | 成功: {batch_success} | 跳过: {batch_failed}")
                     
                     if idx % 5 == 0:
                         time_module.sleep(0.5)
                     
                 except Exception as e:
-                    logger.debug(f"  [{idx}/{len(batch)}] {symbol} ✗")
+                    logger.debug(f"  {symbol} 异常: {e}")
                     total_failed += 1
+                    batch_failed += 1
+            
+            # 批次完成汇总
+            logger.info(f"  ✓ 第{batch_num}批完成: 成功 {batch_success}/{len(batch)} | 累计: {total_success}/{len(stock_list)}\n")
         
-        logger.info(f"\n✓ 完成：成功 {total_success}, 失败 {total_failed}\n")
+        logger.info(f"\n{'='*60}")
+        logger.info(f"全部完成：成功 {total_success} | 跳过 {total_failed} | 总计 {len(stock_list)}")
+        logger.info(f"{'='*60}\n")
 
 
 def main():
