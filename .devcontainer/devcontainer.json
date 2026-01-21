@@ -1,0 +1,21 @@
+{
+  "name": "A-Share Cloud Lab",
+  "image": "mcr.microsoft.com/devcontainers/python:3.13",
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "username": "vscode"
+    }
+  },
+  "postCreateCommand": "pip install --upgrade pip && (pip install -r requirements.txt || pip install akshare pandas schedule flake8 pytest)",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python"
+      },
+      "extensions": [
+        "ms-python.python",
+        "ms-toolsai.jupyter"
+      ]
+    }
+  }
+}

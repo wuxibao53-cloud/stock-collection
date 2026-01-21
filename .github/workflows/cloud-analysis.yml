@@ -1,9 +1,12 @@
 name: A股缠论信号云端分析
 
 on:
-  # 定时运行：工作日每小时运行一次
+  # 定时运行：工作日两次（UTC换算为中国时区 +8）
   schedule:
-    - cron: '0 * * * 1-5'  # 周一到周五，每小时
+    # 开盘前 09:15 CST → 01:15 UTC
+    - cron: '15 1 * * 1-5'
+    # 闭盘后 15:10 CST → 07:10 UTC
+    - cron: '10 7 * * 1-5'
   
   # 手动触发
   workflow_dispatch:
@@ -45,6 +48,8 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
+          # 明确安装云端所需依赖，防止requirements缺漏
+          pip install akshare pandas schedule || true
       
       - name: 创建日志目录
         run: mkdir -p logs
@@ -72,12 +77,12 @@ jobs:
           print('✓ 数据库初始化完成')
           EOF
       
-      - name: 获取历史K线数据（AKShare）
+      - name: 获取多时间框架历史K线（1f/5f/30f）
         run: |
           MODE="${{ github.event.inputs.mode || 'all' }}"
           DAYS="${{ github.event.inputs.history_days || '3' }}"
-          echo "📊 获取最近 ${DAYS} 天历史分钟K线（模式: ${MODE}）..."
-          python3 historical_data_fetcher.py --db logs/quotes.db --days ${DAYS} --mode ${MODE} 2>&1 | tee logs/history_fetch.log
+          echo "📊 获取最近 ${DAYS} 天 1f/5f/30f 历史K线（模式: ${MODE}）..."
+          python3 multi_timeframe_fetcher.py --db logs/quotes.db --days ${DAYS} --mode ${MODE} --timeframes 1 5 30 2>&1 | tee logs/history_fetch.log
       
       - name: 实时采集当前行情
         run: |
@@ -85,39 +90,47 @@ jobs:
           echo "🔄 采集实时行情（模式: ${MODE}）..."
           python3 full_a_stock_collector.py --db logs/quotes.db --mode ${MODE} --async 2>&1 | tee logs/realtime_collect.log || true
       
-      - name: 验证数据量
+        - name: 验证数据量（多时间框架）
         run: |
           python3 << 'EOF'
           import sqlite3
           conn = sqlite3.connect('logs/quotes.db')
-          cursor = conn.cursor()
-          
-          # 总数据量
-          total = cursor.execute('SELECT COUNT(*) FROM minute_bars').fetchone()[0]
-          
-          # 每只股票K线数
-          cursor.execute('''
+          c = conn.cursor()
+
+          def count_table(name):
+            try:
+              return c.execute(f'SELECT COUNT(*) FROM {name}').fetchone()[0]
+            except Exception:
+              return 0
+
+          total_1f = count_table('minute_bars_1f')
+          total_5f = count_table('minute_bars_5f')
+          total_30f = count_table('minute_bars_30f')
+
+          print('\n📊 多时间框架数据统计')
+          print('=' * 60)
+          print(f'1f 总K线数: {total_1f}')
+          print(f'5f 总K线数: {total_5f}')
+          print(f'30f 总K线数: {total_30f}')
+
+          # 30f 每只股票K线数 Top10
+          try:
+            c.execute('''
             SELECT symbol, COUNT(*) as cnt 
-            FROM minute_bars 
+            FROM minute_bars_30f 
             GROUP BY symbol 
             ORDER BY cnt DESC 
             LIMIT 10
-          ''')
-          
-          print()
-          print('📊 数据统计')
-          print('=' * 60)
-          print(f'总K线数: {total}')
-          print()
-          print('Top 10 数据量:')
-          for symbol, cnt in cursor.fetchall():
+            ''')
+            print('\nTop 10 (30f 数据量):')
+            for symbol, cnt in c.fetchall():
               print(f'  {symbol:12} {cnt:6} 条')
-          
+          except Exception:
+            pass
+
           conn.close()
-          
-          if total < 50:
-              print()
-              print('⚠️  警告: 数据量不足，信号可能为空')
+          if (total_1f + total_5f + total_30f) < 50:
+            print('\n⚠️  警告: 数据量不足，信号可能为空')
           EOF
       
       - name: 缠论信号分析
