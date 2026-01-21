@@ -50,16 +50,16 @@ class TimeFrame(Enum):
 class MultiTimeframeDataFetcher:
     """多时间框架K线数据获取器 - 支持API池轮转"""
     
-    def __init__(self, db_path: str = 'logs/quotes.db', use_api_pool: bool = True):
+    def __init__(self, db_path: str = 'logs/quotes.db', use_api_pool: bool = False):
         self.db_path = db_path
         self.max_retries = 3  # 最多重试次数
         self.timeframes = [TimeFrame.ONE_MIN, TimeFrame.FIVE_MIN, TimeFrame.THIRTY_MIN]
         self.api_lock = threading.Lock()  # API限流锁（防止并发过高导致连接错误）
-        self.api_call_interval = 1.0  # API调用间隔（秒） - 增加到1秒避免限流
+        self.api_call_interval = 0.1  # API调用间隔（秒） - 改回0.1秒，让并发有效果
         
-        # API池支持
-        self.use_api_pool = use_api_pool
-        if use_api_pool:
+        # API池支持（暂时禁用，直连已足够）
+        self.use_api_pool = False  # 改为False，只用直连
+        if use_api_pool and False:  # 条件永远False，跳过
             try:
                 self.api_pool = get_api_pool()
                 self.retry_strategy = get_retry_strategy()
@@ -71,41 +71,15 @@ class MultiTimeframeDataFetcher:
         self._init_db()
     
     def _api_call_safe(self, symbol, period, start_date, end_date):
-        """线程安全的API调用（带限流 + API池支持）
+        """线程安全的API调用（优化版本）
         
-        策略：直连为主，API池为辅
-        - 优先尝试直连（不受冷却影响）
-        - 如果直连失败，不标记为API错误（避免冷却）
-        - API池仅用于备用
+        策略：
+        - 快速直连（无延迟）
+        - 失败后随机指数退避重试
+        - 不进入API池冷却期（避免全局阻塞）
         """
-        with self.api_lock:
-            # 延迟1秒（避免并发冲击）+ 随机0-200ms
-            time_module.sleep(self.api_call_interval + random.uniform(0, 0.2))
-            
-            # 首先尝试直连（最可靠）
-            try:
-                df = ak.stock_zh_a_hist_min_em(
-                    symbol=symbol,
-                    period=period,
-                    adjust='',
-                    start_date=start_date.strftime('%Y-%m-%d 09:30:00'),
-                    end_date=end_date.strftime('%Y-%m-%d 15:00:00'),
-                    timeout=10
-                )
-                return df
-            except Exception as direct_error:
-                # 直连失败，这是正常的网络波动，不应该冷却
-                logger.debug(f"{symbol} {period}f 直连失败: {type(direct_error).__name__}")
-                # 不要标记为API错误，避免进入冷却期
-                pass
-        
-        # 直连失败后，可以尝试API池中的代理
-        # 但由于目前没有有效的代理，暂时跳过
-        # 在未来集成真实代理时，可以在这里添加代理轮转逻辑
-        
-        # 最后再次尝试直连（重试一次）
-        with self.api_lock:
-            time_module.sleep(1.0)  # 等待1秒再试
+        # 不使用全局锁，直接调用（AKShare自己会处理并发）
+        for attempt in range(3):  # 最多3次尝试
             try:
                 df = ak.stock_zh_a_hist_min_em(
                     symbol=symbol,
@@ -117,7 +91,14 @@ class MultiTimeframeDataFetcher:
                 )
                 return df
             except Exception as e:
-                raise e
+                # 第1,2次失败时，短延迟后重试
+                if attempt < 2:
+                    # 随机退避：100ms ~ 500ms
+                    wait_time = random.uniform(0.1 * (attempt + 1), 0.5 * (attempt + 1))
+                    time_module.sleep(wait_time)
+                else:
+                    # 第3次失败才抛出异常
+                    raise e
     
     def _init_db(self):
         """初始化数据库 - 支持多个时间框架表"""
