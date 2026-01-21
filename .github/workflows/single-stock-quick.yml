@@ -1,0 +1,80 @@
+name: 单股快速查询
+
+on:
+  workflow_dispatch:
+    inputs:
+      symbol:
+        description: '股票代码（如：sh600519）'
+        required: true
+        type: string
+      days:
+        description: '历史天数'
+        required: false
+        default: '5'
+        type: string
+      timeframes:
+        description: '时间框架（空格分隔，如：1 5 30）'
+        required: false
+        default: '1 5 30'
+        type: string
+
+jobs:
+  quick-fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+      
+      - name: 设置Python环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      
+      - name: 安装依赖
+        run: |
+          pip install --upgrade pip
+          pip install akshare pandas schedule || true
+      
+      - name: 创建日志目录
+        run: mkdir -p logs
+      
+      - name: 获取单股数据
+        run: |
+          SYMBOL="${{ github.event.inputs.symbol }}"
+          DAYS="${{ github.event.inputs.days || '5' }}"
+          TF="${{ github.event.inputs.timeframes || '1 5 30' }}"
+          echo "📊 获取 ${SYMBOL} 最近 ${DAYS} 天数据（时间框架: ${TF}）..."
+          python3 multi_timeframe_fetcher.py --db logs/quotes.db --symbol ${SYMBOL} --days ${DAYS} --timeframes ${TF} 2>&1 | tee logs/single_stock.log
+      
+      - name: 分型检测
+        run: |
+          SYMBOL="${{ github.event.inputs.symbol }}"
+          python3 << 'EOF'
+          import sys
+          from multi_timeframe_fetcher import MultiTimeframeDataFetcher, TimeFrame
+          
+          symbol = '${{ github.event.inputs.symbol }}'
+          fetcher = MultiTimeframeDataFetcher('logs/quotes.db')
+          
+          print(f"\n{'='*60}")
+          print(f"分型检测结果：{symbol}")
+          print('='*60)
+          
+          for tf in [TimeFrame.THIRTY_MIN, TimeFrame.FIVE_MIN, TimeFrame.ONE_MIN]:
+              fractals = fetcher.detect_fractal_patterns(symbol, tf)
+              print(f"\n{tf.value}f 分型：{len(fractals)} 个")
+              for f in fractals[-3:]:  # 最近3个
+                  print(f"  {f['type']:6} | {f['time']} | 价位 {f['level']:.2f}")
+          EOF
+      
+      - name: 上传产物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: single-stock-${{ github.event.inputs.symbol }}-${{ github.run_number }}
+          path: |
+            logs/*.log
+            logs/quotes.db
+          retention-days: 7
