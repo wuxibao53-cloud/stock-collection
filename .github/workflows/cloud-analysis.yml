@@ -51,7 +51,7 @@ jobs:
       
       - name: 初始化数据库
         run: |
-          python3 -c "
+          python3 << 'EOF'
           import sqlite3
           conn = sqlite3.connect('logs/quotes.db')
           cursor = conn.cursor()
@@ -70,7 +70,7 @@ jobs:
           conn.commit()
           conn.close()
           print('✓ 数据库初始化完成')
-          "
+          EOF
       
       - name: 获取历史K线数据（AKShare）
         run: |
@@ -87,7 +87,7 @@ jobs:
       
       - name: 验证数据量
         run: |
-          python3 -c "
+          python3 << 'EOF'
           import sqlite3
           conn = sqlite3.connect('logs/quotes.db')
           cursor = conn.cursor()
@@ -104,23 +104,26 @@ jobs:
             LIMIT 10
           ''')
           
-          print(f'\n📊 数据统计')
-          print(f'{'='*60}')
+          print()
+          print('📊 数据统计')
+          print('=' * 60)
           print(f'总K线数: {total}')
-          print(f'\nTop 10 数据量:')
+          print()
+          print('Top 10 数据量:')
           for symbol, cnt in cursor.fetchall():
               print(f'  {symbol:12} {cnt:6} 条')
           
           conn.close()
           
           if total < 50:
-              print('\n⚠️  警告: 数据量不足，信号可能为空')
-          "
+              print()
+              print('⚠️  警告: 数据量不足，信号可能为空')
+          EOF
       
       - name: 缠论信号分析
         run: |
           echo "🔍 开始缠论三类买卖点分析..."
-          python3 -c "
+          python3 << 'EOF' 2>&1 | tee logs/analysis.log
           from chan_integrated_system import ChanTradingSystemIntegrated
           import logging
           
@@ -141,7 +144,7 @@ jobs:
               print(report)
           else:
               logger.warning('无数据可分析')
-          " 2>&1 | tee logs/analysis.log
+          EOF
       
       - name: 回测验证（可选）
         continue-on-error: true
@@ -152,41 +155,41 @@ jobs:
       - name: 生成摘要报告
         if: always()
         run: |
-          python3 -c '
+          python3 << 'EOF'
           import sqlite3
           from datetime import datetime
           
-          conn = sqlite3.connect("logs/quotes.db")
-          cursor = conn.cursor()
-          
-          total = cursor.execute("SELECT COUNT(*) FROM minute_bars").fetchone()[0]
-          symbols = cursor.execute("SELECT COUNT(DISTINCT symbol) FROM minute_bars").fetchone()[0]
-          
-          sep = "=" * 70
-          print(f"""
-{sep}
-缠论交易系统云端分析报告
-{sep}
-
-📅 运行时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-
-📊 数据统计:
-  - 股票数量: {symbols}
-  - K线总数: {total}
-  - 平均深度: {total // max(symbols, 1)} 条/股
-
-📁 输出文件:
-  - logs/history_fetch.log   (历史数据获取)
-  - logs/realtime_collect.log (实时采集)
-  - logs/analysis.log        (信号分析)
-  - logs/signals_report.txt  (信号报告)
-  - logs/backtest.log        (回测结果)
-
-{sep}
-          """)
-          
-          conn.close()
-          '
+          try:
+              conn = sqlite3.connect("logs/quotes.db")
+              cursor = conn.cursor()
+              
+              total = cursor.execute("SELECT COUNT(*) FROM minute_bars").fetchone()[0]
+              symbols = cursor.execute("SELECT COUNT(DISTINCT symbol) FROM minute_bars").fetchone()[0]
+              
+              print("=" * 70)
+              print("缠论交易系统云端分析报告")
+              print("=" * 70)
+              print()
+              print("📅 运行时间:", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+              print()
+              print("📊 数据统计:")
+              print(f"  - 股票数量: {symbols}")
+              print(f"  - K线总数: {total}")
+              print(f"  - 平均深度: {total // max(symbols, 1)} 条/股")
+              print()
+              print("📁 输出文件:")
+              print("  - logs/history_fetch.log   (历史数据获取)")
+              print("  - logs/realtime_collect.log (实时采集)")
+              print("  - logs/analysis.log        (信号分析)")
+              print("  - logs/signals_report.txt  (信号报告)")
+              print("  - logs/backtest.log        (回测结果)")
+              print()
+              print("=" * 70)
+              
+              conn.close()
+          except Exception as e:
+              print(f"数据统计失败: {e}")
+          EOF
       
       - name: 上传分析产物
         if: always()
