@@ -152,22 +152,23 @@ jobs:
       - name: 生成摘要报告
         if: always()
         run: |
-          python3 -c "
+          python3 -c '
           import sqlite3
           from datetime import datetime
           
-          conn = sqlite3.connect('logs/quotes.db')
+          conn = sqlite3.connect("logs/quotes.db")
           cursor = conn.cursor()
           
-          total = cursor.execute('SELECT COUNT(*) FROM minute_bars').fetchone()[0]
-          symbols = cursor.execute('SELECT COUNT(DISTINCT symbol) FROM minute_bars').fetchone()[0]
+          total = cursor.execute("SELECT COUNT(*) FROM minute_bars").fetchone()[0]
+          symbols = cursor.execute("SELECT COUNT(DISTINCT symbol) FROM minute_bars").fetchone()[0]
           
-          print(f'''
-{'='*70}
+          sep = "=" * 70
+          print(f"""
+{sep}
 缠论交易系统云端分析报告
-{'='*70}
+{sep}
 
-📅 运行时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+📅 运行时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
 📊 数据统计:
   - 股票数量: {symbols}
@@ -181,11 +182,11 @@ jobs:
   - logs/signals_report.txt  (信号报告)
   - logs/backtest.log        (回测结果)
 
-{'='*70}
-          ''')
+{sep}
+          """)
           
           conn.close()
-          "
+          '
       
       - name: 上传分析产物
         if: always()
