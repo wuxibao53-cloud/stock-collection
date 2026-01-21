@@ -1,0 +1,198 @@
+name: A股缠论信号云端分析
+
+on:
+  # 定时运行：工作日每小时运行一次
+  schedule:
+    - cron: '0 * * * 1-5'  # 周一到周五，每小时
+  
+  # 手动触发
+  workflow_dispatch:
+    inputs:
+      fetch_history:
+        description: '是否获取历史数据'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      history_days:
+        description: '历史数据天数'
+        required: false
+        default: '5'
+        type: string
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    
+    env:
+      HTTP_PROXY: ${{ secrets.HTTP_PROXY }}
+      HTTPS_PROXY: ${{ secrets.HTTPS_PROXY }}
+    
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+      
+      - name: 设置Python环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+      
+      - name: 安装依赖
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: 创建日志目录
+        run: mkdir -p logs
+      
+      - name: 初始化数据库
+        run: |
+          python3 -c "
+          import sqlite3
+          conn = sqlite3.connect('logs/quotes.db')
+          cursor = conn.cursor()
+          cursor.execute('PRAGMA journal_mode=WAL')
+          cursor.execute('''
+            CREATE TABLE IF NOT EXISTS minute_bars (
+              id INTEGER PRIMARY KEY,
+              symbol TEXT NOT NULL,
+              minute TEXT NOT NULL,
+              open REAL, high REAL, low REAL, close REAL,
+              volume INTEGER, amount REAL,
+              UNIQUE(symbol, minute)
+            )
+          ''')
+          cursor.execute('CREATE INDEX IF NOT EXISTS idx_symbol_minute ON minute_bars(symbol, minute DESC)')
+          conn.commit()
+          conn.close()
+          print('✓ 数据库初始化完成')
+          "
+      
+      - name: 获取历史K线数据（AKShare）
+        if: github.event.inputs.fetch_history != 'false'
+        run: |
+          DAYS="${{ github.event.inputs.history_days || '5' }}"
+          echo "📊 获取最近 ${DAYS} 天历史分钟K线..."
+          python3 historical_data_fetcher.py --db logs/quotes.db --days ${DAYS} 2>&1 | tee logs/history_fetch.log
+      
+      - name: 实时采集当前行情
+        run: |
+          echo "🔄 采集实时行情..."
+          python3 full_a_stock_collector.py --db logs/quotes.db --mode hot --async 2>&1 | tee logs/realtime_collect.log || true
+      
+      - name: 验证数据量
+        run: |
+          python3 -c "
+          import sqlite3
+          conn = sqlite3.connect('logs/quotes.db')
+          cursor = conn.cursor()
+          
+          # 总数据量
+          total = cursor.execute('SELECT COUNT(*) FROM minute_bars').fetchone()[0]
+          
+          # 每只股票K线数
+          cursor.execute('''
+            SELECT symbol, COUNT(*) as cnt 
+            FROM minute_bars 
+            GROUP BY symbol 
+            ORDER BY cnt DESC 
+            LIMIT 10
+          ''')
+          
+          print(f'\n📊 数据统计')
+          print(f'{'='*60}')
+          print(f'总K线数: {total}')
+          print(f'\nTop 10 数据量:')
+          for symbol, cnt in cursor.fetchall():
+              print(f'  {symbol:12} {cnt:6} 条')
+          
+          conn.close()
+          
+          if total < 50:
+              print('\n⚠️  警告: 数据量不足，信号可能为空')
+          "
+      
+      - name: 缠论信号分析
+        run: |
+          echo "🔍 开始缠论三类买卖点分析..."
+          python3 -c "
+          from chan_integrated_system import ChanTradingSystemIntegrated
+          import logging
+          
+          logging.basicConfig(level=logging.INFO)
+          logger = logging.getLogger(__name__)
+          
+          system = ChanTradingSystemIntegrated('logs/quotes.db')
+          symbols = system.get_all_symbols_from_db()
+          
+          if symbols:
+              logger.info(f'分析 {len(symbols)} 只股票...')
+              results = system.analyze_multiple_symbols(symbols)
+              report = system.generate_report(results)
+              
+              with open('logs/signals_report.txt', 'w', encoding='utf-8') as f:
+                  f.write(report)
+              
+              print(report)
+          else:
+              logger.warning('无数据可分析')
+          " 2>&1 | tee logs/analysis.log
+      
+      - name: 回测验证（可选）
+        continue-on-error: true
+        run: |
+          echo "📈 运行回测..."
+          python3 run_complete_system.py --mode backtest 2>&1 | tee logs/backtest.log || true
+      
+      - name: 生成摘要报告
+        if: always()
+        run: |
+          python3 -c "
+          import sqlite3
+          from datetime import datetime
+          
+          conn = sqlite3.connect('logs/quotes.db')
+          cursor = conn.cursor()
+          
+          total = cursor.execute('SELECT COUNT(*) FROM minute_bars').fetchone()[0]
+          symbols = cursor.execute('SELECT COUNT(DISTINCT symbol) FROM minute_bars').fetchone()[0]
+          
+          print(f'''
+{'='*70}
+缠论交易系统云端分析报告
+{'='*70}
+
+📅 运行时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+📊 数据统计:
+  - 股票数量: {symbols}
+  - K线总数: {total}
+  - 平均深度: {total // max(symbols, 1)} 条/股
+
+📁 输出文件:
+  - logs/history_fetch.log   (历史数据获取)
+  - logs/realtime_collect.log (实时采集)
+  - logs/analysis.log        (信号分析)
+  - logs/signals_report.txt  (信号报告)
+  - logs/backtest.log        (回测结果)
+
+{'='*70}
+          ''')
+          
+          conn.close()
+          "
+      
+      - name: 上传分析产物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: analysis-reports-${{ github.run_number }}
+          path: |
+            logs/*.log
+            logs/*.txt
+            logs/quotes.db
+          retention-days: 30
