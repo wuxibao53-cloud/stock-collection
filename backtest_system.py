@@ -181,7 +181,18 @@ class RiskManager:
     def get_statistics(self) -> Dict:
         """获取回测统计"""
         if not self.trades_history:
-            return {'trades': 0, 'winning_rate': 0}
+            return {
+                'total_trades': 0,
+                'winning_trades': 0,
+                'losing_trades': 0,
+                'winning_rate': 0.0,
+                'total_pnl': 0.0,
+                'total_pnl_pct': 0.0,
+                'avg_pnl': 0.0,
+                'avg_pnl_pct': 0.0,
+                'final_capital': self.current_capital,
+                'sharpe_ratio': 0.0,
+            }
         
         wins = sum(1 for t in self.trades_history if t['pnl'] > 0)
         losses = sum(1 for t in self.trades_history if t['pnl'] < 0)
