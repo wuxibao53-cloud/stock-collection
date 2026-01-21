@@ -115,6 +115,8 @@ class MultiTimeframeDataFetcher:
         clean_symbol = symbol.replace('sh', '').replace('sz', '')
         
         for tf in timeframes:
+            result[tf.value] = []  # 默认空结果
+            
             try:
                 end_date = datetime.now()
                 start_date = end_date - timedelta(days=days)
@@ -127,66 +129,76 @@ class MultiTimeframeDataFetcher:
                 
                 period = tf.value
                 
-                df = ak.stock_zh_a_hist_min_em(
-                    symbol=clean_symbol,
-                    period=period,
-                    adjust='',
-                    start_date=start_date.strftime('%Y-%m-%d 09:30:00'),
-                    end_date=end_date.strftime('%Y-%m-%d 15:00:00')
-                )
+                # API调用本身可能抛异常或返回奇怪的值
+                try:
+                    df = ak.stock_zh_a_hist_min_em(
+                        symbol=clean_symbol,
+                        period=period,
+                        adjust='',
+                        start_date=start_date.strftime('%Y-%m-%d 09:30:00'),
+                        end_date=end_date.strftime('%Y-%m-%d 15:00:00')
+                    )
+                except Exception as e:
+                    logger.warning(f"{symbol} {tf.value}f API调用异常: {type(e).__name__}")
+                    continue
                 
-                # 健壮性检查：处理None、空数据、格式错误（完全防御性编程）
+                # 健壮性检查：处理None、空数据、格式错误
                 if df is None:
                     logger.warning(f"{symbol} {tf.value}f API返回None")
-                    result[tf.value] = []
                     continue
                 
                 # 检查是否是DataFrame类型
-                if not hasattr(df, 'empty') or not hasattr(df, 'columns'):
-                    logger.warning(f"{symbol} {tf.value}f 返回类型异常（不是DataFrame）")
-                    result[tf.value] = []
+                if not hasattr(df, 'empty') or not hasattr(df, 'columns') or not hasattr(df, 'iterrows'):
+                    logger.warning(f"{symbol} {tf.value}f 返回类型异常")
                     continue
                 
                 if df.empty:
                     logger.warning(f"{symbol} {tf.value}f 无数据")
-                    result[tf.value] = []
                     continue
                 
-                # 检查必需列是否存在（用try包裹以防columns访问失败）
+                # 检查必需列
                 required_cols = ['时间', '开盘', '最高', '最低', '收盘', '成交量']
                 try:
-                    if not all(col in df.columns for col in required_cols):
-                        logger.warning(f"{symbol} {tf.value}f 数据格式异常，缺少必需列")
-                        result[tf.value] = []
+                    missing = [col for col in required_cols if col not in df.columns]
+                    if missing:
+                        logger.warning(f"{symbol} {tf.value}f 缺少列: {missing}")
                         continue
-                except Exception as e:
-                    logger.warning(f"{symbol} {tf.value}f 列检查失败: {e}")
-                    result[tf.value] = []
+                except Exception:
+                    logger.warning(f"{symbol} {tf.value}f 列检查失败")
                     continue
                 
+                # 解析数据行
                 bars = []
-                for _, row in df.iterrows():
-                    try:
-                        bars.append({
-                            'symbol': symbol,
-                            'minute': str(row['时间']),
-                            'open': float(row['开盘']),
-                            'high': float(row['最高']),
-                            'low': float(row['最低']),
-                            'close': float(row['收盘']),
-                            'volume': int(row['成交量']),
-                            'amount': float(row['成交额']) if '成交额' in row else 0,
-                        })
-                    except (ValueError, KeyError, TypeError) as e:
-                        logger.debug(f"{symbol} {tf.value}f 跳过异常行: {e}")
-                        continue
+                try:
+                    for _, row in df.iterrows():
+                        try:
+                            bars.append({
+                                'symbol': symbol,
+                                'minute': str(row['时间']),
+                                'open': float(row['开盘']),
+                                'high': float(row['最高']),
+                                'low': float(row['最低']),
+                                'close': float(row['收盘']),
+                                'volume': int(row['成交量']),
+                                'amount': float(row.get('成交额', 0)),
+                            })
+                        except (ValueError, KeyError, TypeError) as e:
+                            logger.debug(f"{symbol} {tf.value}f 跳过异常行: {e}")
+                            continue
+                except Exception as e:
+                    logger.warning(f"{symbol} {tf.value}f 数据解析失败: {type(e).__name__}")
+                    continue
                 
-                logger.debug(f"✓ {symbol} {tf.value}f 获取 {len(bars)} 条K线")
-                result[tf.value] = bars
+                # 成功获取数据
+                if bars:
+                    logger.debug(f"✓ {symbol} {tf.value}f 获取 {len(bars)} 条K线")
+                    result[tf.value] = bars
+                
                 time_module.sleep(0.2)
                 
             except Exception as e:
-                logger.error(f"✗ {symbol} {tf.value}f 获取失败: {e}")
+                # 外层catch-all异常处理（理论上不应该到这里，但保险起见）
+                logger.error(f"✗ {symbol} {tf.value}f 未捕获异常: {type(e).__name__} - {e}")
                 
                 # 重试逻辑
                 if retry_count < self.max_retries:
@@ -199,11 +211,8 @@ class MultiTimeframeDataFetcher:
                     )
                     if tf.value in retry_result and retry_result[tf.value]:
                         result[tf.value] = retry_result[tf.value]
-                    else:
-                        result[tf.value] = []
                 else:
                     logger.error(f"{symbol} {tf.value}f 已达最大重试次数")
-                    result[tf.value] = []
         
         return result
     
