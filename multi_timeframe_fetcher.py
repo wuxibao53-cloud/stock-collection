@@ -322,7 +322,19 @@ class MultiTimeframeDataFetcher:
         if timeframes is None:
             timeframes = self.timeframes
         
-        stock_list = StockListManager.get_a_stock_list()
+        # 获取股票列表并过滤掉指数
+        all_stocks = StockListManager.get_a_stock_list()
+        
+        # 过滤规则：排除指数代码（sh000xxx, sz399xxx）
+        stock_list = [
+            stock for stock in all_stocks
+            if not (stock.symbol.startswith('sh000') or stock.symbol.startswith('sz399'))
+        ]
+        
+        filtered_count = len(all_stocks) - len(stock_list)
+        if filtered_count > 0:
+            logger.info(f"已过滤 {filtered_count} 个指数代码（指数不支持分钟K线）")
+        
         total_success = 0
         total_failed = 0
         
