@@ -85,7 +85,7 @@ jobs:
           print('✓ 数据库初始化完成')
           EOF
       
-        - name: 获取30f历史K线（全量A股，基线）
+      - name: 获取30f历史K线（全量A股，基线）
         run: |
           MODE="${{ github.event.inputs.mode || 'all' }}"
           DAYS="${{ github.event.inputs.history_days || '3' }}"
@@ -93,7 +93,7 @@ jobs:
           echo "📊 基线：获取最近 ${DAYS} 天 30f 历史K线（模式: ${MODE}）..."
           python3 multi_timeframe_fetcher.py --db logs/quotes.db --days ${DAYS} --mode ${MODE} --timeframes 30 2>&1 | tee logs/history_fetch_30f.log
 
-        - name: 生成候选股票列表（基于30f分型）
+      - name: 生成候选股票列表（基于30f分型）
         run: |
           python3 << 'EOF'
           import sqlite3
@@ -121,7 +121,7 @@ jobs:
           print(f"✓ 候选股票数: {len(watch)} (已写入 logs/watchlist.txt)")
           EOF
 
-        - name: 获取候选股票的1f/5f（精细化）
+      - name: 获取候选股票的1f/5f（精细化）
         run: |
           # 手动触发可覆盖时间框架；默认仅对候选股获取 1 和 5
           TF_INPUTS="${{ github.event.inputs.timeframes || '' }}"
@@ -155,7 +155,7 @@ jobs:
           echo "🔄 采集实时行情（模式: ${MODE}）..."
           python3 full_a_stock_collector.py --db logs/quotes.db --mode ${MODE} --async 2>&1 | tee logs/realtime_collect.log || true
       
-        - name: 验证数据量（多时间框架）
+      - name: 验证数据量（多时间框架）
         run: |
           python3 << 'EOF'
           import sqlite3
@@ -194,7 +194,8 @@ jobs:
             pass
 
           conn.close()
-            if (total_1f + total_5f + total_30f) < 50:
+          
+          if (total_1f + total_5f + total_30f) < 50:
             print('\n⚠️  警告: 数据量不足，信号可能为空')
           EOF
       
