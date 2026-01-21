@@ -1,0 +1,54 @@
+{
+  "system": {
+    "name": "缠论交易系统",
+    "version": "1.0.0",
+    "timezone": "Asia/Shanghai"
+  },
+  
+  "database": {
+    "path": "logs/quotes.db"
+  },
+  
+  "data_collection": {
+    "history_days": 30,
+    "threads": {
+      "baseline_30f": 15,
+      "watchlist_5f": 5,
+      "realtime_1f": 2
+    }
+  },
+  
+  "monitoring": {
+    "interval_5f": 300,
+    "interval_1f": 60,
+    "market_hours": {
+      "morning": ["09:30", "11:30"],
+      "afternoon": ["13:00", "15:00"]
+    }
+  },
+  
+  "email": {
+    "enabled": false,
+    "smtp_server": "smtp.163.com",
+    "smtp_port": 465,
+    "from_email": "your-email@163.com",
+    "password": "your-password-or-auth-code",
+    "to_emails": [
+      "receiver1@example.com",
+      "receiver2@example.com"
+    ]
+  },
+  
+  "analysis": {
+    "min_volume": 100000,
+    "min_fractals": 3,
+    "confidence_threshold": 0.7
+  },
+  
+  "logging": {
+    "level": "INFO",
+    "file": "logs/system.log",
+    "max_size_mb": 100,
+    "backup_count": 5
+  }
+}
