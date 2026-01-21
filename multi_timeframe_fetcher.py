@@ -67,9 +67,7 @@ class MultiTimeframeDataFetcher:
             except Exception as e:
                 logger.warning(f"⚠️  API池加载失败: {e}，将使用直连模式")
                 self.use_api_pool = False
-        Frame.FIVE_MIN, TimeFrame.THIRTY_MIN]
-        self.api_lock = threading.Lock()  # API限流锁（防止并发过高导致连接错误）
-        self.api_call_interval = 0.5  # API调用间隔（秒）
+        
         self._init_db()
     
     def _api_call_safe(self, symbol, period, start_date, end_date):
