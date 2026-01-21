@@ -135,9 +135,15 @@ class MultiTimeframeDataFetcher:
                     end_date=end_date.strftime('%Y-%m-%d 15:00:00')
                 )
                 
-                # 健壮性检查：处理None、空数据、格式错误
+                # 健壮性检查：处理None、空数据、格式错误（完全防御性编程）
                 if df is None:
                     logger.warning(f"{symbol} {tf.value}f API返回None")
+                    result[tf.value] = []
+                    continue
+                
+                # 检查是否是DataFrame类型
+                if not hasattr(df, 'empty') or not hasattr(df, 'columns'):
+                    logger.warning(f"{symbol} {tf.value}f 返回类型异常（不是DataFrame）")
                     result[tf.value] = []
                     continue
                 
@@ -146,10 +152,15 @@ class MultiTimeframeDataFetcher:
                     result[tf.value] = []
                     continue
                 
-                # 检查必需列是否存在
+                # 检查必需列是否存在（用try包裹以防columns访问失败）
                 required_cols = ['时间', '开盘', '最高', '最低', '收盘', '成交量']
-                if not all(col in df.columns for col in required_cols):
-                    logger.warning(f"{symbol} {tf.value}f 数据格式异常，缺少必需列")
+                try:
+                    if not all(col in df.columns for col in required_cols):
+                        logger.warning(f"{symbol} {tf.value}f 数据格式异常，缺少必需列")
+                        result[tf.value] = []
+                        continue
+                except Exception as e:
+                    logger.warning(f"{symbol} {tf.value}f 列检查失败: {e}")
                     result[tf.value] = []
                     continue
                 
