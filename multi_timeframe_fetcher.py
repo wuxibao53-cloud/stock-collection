@@ -46,7 +46,9 @@ class TimeFrame(Enum):
     FIVE_MIN = '5'     # 5分钟
     THIRTY_MIN = '30'  # 30分钟
 
- - 支持API池轮转"""
+
+class MultiTimeframeDataFetcher:
+    """多时间框架K线数据获取器 - 支持API池轮转"""
     
     def __init__(self, db_path: str = 'logs/quotes.db', use_api_pool: bool = True):
         self.db_path = db_path
